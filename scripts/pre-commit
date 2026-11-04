@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+command -v gitleaks >/dev/null || { echo "gitleaks not found: mise use -g gitleaks@latest" >&2; exit 1; }
+gitleaks git --staged --no-banner --redact --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(js|json)$' || true)
+[ -z "$staged" ] || { [ -x node_modules/.bin/biome ] || { echo "biome missing: npm ci" >&2; exit 1; }; echo "$staged" | xargs node_modules/.bin/biome check --no-errors-on-unmatched; }
