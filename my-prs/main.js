@@ -2,11 +2,13 @@
 // gh runs on the focused space's machine, so each machine uses its own gh login.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { spaces, focused, exec, theme, window } from "herdr";
+import { spaces, focused, exec, theme, window, shared, setShared } from "herdr";
 import { actions, findWorktree } from "./actions.js";
 import { diffView } from "./diff.js";
 import { localTime, ago } from "./time.js";
 import { loadComments, commentsMarkdown } from "./comments.js";
+import { focusKey, prForFocus } from "./follow.js";
+import { notifyChanges } from "./notify.js";
 
 function machine() {
   const space = spaces().find(s => s.active),
@@ -66,10 +68,28 @@ function times(pr, fmt) {
   return [`⊕ ${fmt(pr.createdAt)}`, commit && `⊙ ${fmt(commit)}`, talk && `✉ ${fmt(talk)}`].filter(Boolean).join("   ");
 }
 
+// A header checkbox stored in the app's persisted shared settings; on by default.
+function toggle(id, key, label, t) {
+  const on = shared(key) !== false;
+  return div()
+    .id(id)
+    .px(4)
+    .cursor_pointer()
+    .text_size(12)
+    .text_color(on ? t.accent : t.dim)
+    .hover(s => s.text_color(t.accent))
+    .on_click((_e, cx) => {
+      setShared(key, !on);
+      cx.notify();
+    })
+    .child(`${on ? "☑" : "☐"} ${label}`);
+}
+
 export default class Prs extends View {
   init(_props, cx) {
     this.lists = null;
     this.cache = new Map();
+    this.unseen = new Set(); // PR URLs changed since you last opened them
     this.failures = 0;
     this.next = 0;
     this.refresh(cx);
@@ -106,6 +126,7 @@ export default class Prs extends View {
         if (this.on !== on) {
           // Switched away while loading: keep the result for when you come back.
           const saved = this.cache.get(on) ?? {};
+          this.mark(notifyChanges(saved.lists, lists, on, shared("my-prs.notify") !== false));
           this.cache.set(on, {
             ...saved,
             lists,
@@ -117,6 +138,7 @@ export default class Prs extends View {
           });
           return;
         }
+        this.mark(notifyChanges(this.lists, lists, on, shared("my-prs.notify") !== false));
         this.lists = lists;
         this.rate = rate;
         this.failures = 0;
@@ -176,6 +198,54 @@ export default class Prs extends View {
       .children(parts.map(([text, color]) => div().text_color(color).child(text)));
   }
 
+  mark(urls) {
+    for (const u of urls) this.unseen.add(u);
+  }
+
+  openPr(pr, cx, on = this.on) {
+    this.unseen.delete(pr.url);
+    this.open = pr;
+    this.openOn = on; // its actions keep using this machine's gh after a space switch
+    this.msg = this.confirm = null;
+    this.wt = { url: pr.url, checking: true };
+    this.comments = null;
+    this.showComments = false;
+    cx.spawn(async cx => {
+      let c;
+      try {
+        c = await loadComments(pr, on);
+      } catch (err) {
+        c = { error: String(err.message ?? err), threads: [] };
+      }
+      if (this.open?.url === pr.url) this.comments = { url: pr.url, ...c };
+      cx.notify();
+    });
+    cx.spawn(async cx => {
+      const found = await findWorktree(pr, on);
+      if (this.open?.url === pr.url) this.wt = { url: pr.url, ...found };
+      cx.notify();
+    });
+  }
+
+  // When focus lands on a branch with an open PR, show it. Runs from render; no notify there.
+  follow(cx) {
+    const f = focusKey();
+    const key = f && `${f.on}|${f.cwd}|${f.branch}`;
+    if (key === this.followKey) return;
+    this.followKey = key;
+    if (!f) return;
+    cx.spawn(async cx => {
+      try {
+        const pr = await prForFocus(f, f.on === this.on ? this.lists : null, FIELDS);
+        if (this.followKey !== key || !pr || this.open?.url === pr.url) return;
+        this.openPr(pr, cx, f.on);
+        cx.notify();
+      } catch {
+        // following is a convenience; a failed lookup leaves the panel as it is
+      }
+    });
+  }
+
   row(pr, t) {
     const [icon, color] = CI[pr.commits.nodes[0]?.commit.statusCheckRollup?.state] ?? ["–", "dim"];
     const note = [pr.isDraft && "◇ draft", DECISION[pr.reviewDecision]].filter(Boolean).join(" · ");
@@ -192,28 +262,7 @@ export default class Prs extends View {
       .cursor_pointer()
       .hover(s => s.bg(t.hover))
       .on_click((_e, cx) => {
-        this.open = pr;
-        this.openOn = this.on; // its actions keep using this machine's gh after a space switch
-        this.msg = this.confirm = null;
-        this.wt = { url: pr.url, checking: true };
-        this.comments = null;
-        this.showComments = false;
-        const on = this.openOn;
-        cx.spawn(async cx => {
-          let c;
-          try {
-            c = await loadComments(pr, on);
-          } catch (err) {
-            c = { error: String(err.message ?? err), threads: [] };
-          }
-          if (this.open?.url === pr.url) this.comments = { url: pr.url, ...c };
-          cx.notify();
-        });
-        cx.spawn(async cx => {
-          const found = await findWorktree(pr, on);
-          if (this.open?.url === pr.url) this.wt = { url: pr.url, ...found };
-          cx.notify();
-        });
+        this.openPr(pr, cx);
         cx.notify();
       })
       .child(div().w(12).flex_none().pt(1).text_color(t[color]).child(icon))
@@ -227,6 +276,7 @@ export default class Prs extends View {
             h_flex()
               .gap(8)
               .items_start()
+              .when(this.unseen.has(pr.url), e => e.child(div().flex_none().text_color(t.accent).child("●")))
               .child(div().flex_1().min_w(0).truncate().child(pr.title))
               .child(
                 div()
@@ -374,6 +424,9 @@ export default class Prs extends View {
     )
       this.refresh(cx);
     this.active = active;
+    // On unless turned off; the choice is persisted by the app.
+    if (shared("my-prs.follow") !== false) this.follow(cx);
+    else this.followKey = null;
     const t = theme();
     const body = [];
     if (this.error) body.push(div().p(8).text_size(12).text_color(t.ansi1).child(this.error));
@@ -451,6 +504,21 @@ export default class Prs extends View {
                     : ""
                 }`,
               ),
+          )
+          .child(toggle("prs-notify", "my-prs.notify", "Notify", t))
+          .child(
+            div()
+              .id("prs-follow")
+              .px(4)
+              .cursor_pointer()
+              .text_size(12)
+              .text_color(shared("my-prs.follow") !== false ? t.accent : t.dim)
+              .hover(s => s.text_color(t.accent))
+              .on_click((_e, cx) => {
+                setShared("my-prs.follow", shared("my-prs.follow") === false);
+                cx.notify();
+              })
+              .child(`${shared("my-prs.follow") !== false ? "☑" : "☐"} Follow`),
           )
           .child(
             div()
