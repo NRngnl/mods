@@ -31,15 +31,21 @@ Needs `gh` (logged in) and `git` on each machine whose spaces you use it from.
 
 ## Install
 
+On the machine that runs the Herdr app:
+
 ```sh
-rsync -av --exclude gpui-kit.d.ts --exclude herdr.d.ts --exclude jsconfig.json \
-  <host>:<path-to-this-repo>/my-prs/ ~/.config/herdr-app/mods/my-prs/
+git clone https://github.com/NRngnl/mods.git ~/src/herdr-mods
+mkdir -p ~/.config/herdr-app/mods
+cp -R ~/src/herdr-mods/my-prs ~/.config/herdr-app/mods/
 herdr-app check ~/.config/herdr-app/mods/my-prs
 ```
 
-Then add the mod to a layout (for example as a tab next to Files in `layouts/<yours>.json`) and restart
-the app. Herdr writes `gpui-kit.d.ts`, `herdr.d.ts` and `jsconfig.json` into each mod folder on start;
-they are git-ignored.
+Use the same steps for `my-files`. To update, `git pull` in the clone and copy the folder again.
+
+Then add the mod to a layout, for example as a tab next to Files in
+`~/.config/herdr-app/layouts/<yours>.json` (clone a shipped layout first; shipped ones are replaced
+on start), and restart the app. Herdr writes `gpui-kit.d.ts`, `herdr.d.ts` and `jsconfig.json` into
+each mod folder on start; they are git-ignored.
 
 ## Development
 
