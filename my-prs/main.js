@@ -78,7 +78,6 @@ export default class Prs extends View {
     this.failures ??= 0;
     this.next ??= 0;
     this.on = on;
-    this.open = null;
     this.loading = false;
   }
 
@@ -112,7 +111,7 @@ export default class Prs extends View {
         this.rate = rate;
         this.failures = 0;
         this.next = nextAllowed(rate, 0);
-        if (this.open)
+        if (this.open && this.openOn === on)
           this.open =
             Object.values(lists)
               .flat()
@@ -147,11 +146,12 @@ export default class Prs extends View {
       .hover(s => s.bg(t.hover))
       .on_click((_e, cx) => {
         this.open = pr;
+        this.openOn = this.on; // its actions keep using this machine's gh after a space switch
         this.msg = this.confirm = null;
-        this.wt = null;
+        this.wt = { url: pr.url, checking: true };
         this.comments = null;
         this.showComments = false;
-        const on = this.on;
+        const on = this.openOn;
         cx.spawn(async cx => {
           let c;
           try {
@@ -163,8 +163,8 @@ export default class Prs extends View {
           cx.notify();
         });
         cx.spawn(async cx => {
-          const path = await findWorktree(pr, on);
-          if (this.open?.url === pr.url) this.wt = { url: pr.url, path };
+          const found = await findWorktree(pr, on);
+          if (this.open?.url === pr.url) this.wt = { url: pr.url, ...found };
           cx.notify();
         });
         cx.notify();
