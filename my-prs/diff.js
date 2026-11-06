@@ -1,3 +1,4 @@
+// diffRows and the row drawing are copied from Herdr's `changes` mod (herdr-app, Apache-2.0).
 // In-panel PR diff, drawn like Herdr's Changes mod: a file list, then a virtual list of numbered rows.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";

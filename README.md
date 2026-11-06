@@ -47,6 +47,12 @@ Then add the mod to a layout, for example as a tab next to Files in
 on start), and restart the app. Herdr writes `gpui-kit.d.ts`, `herdr.d.ts` and `jsconfig.json` into
 each mod folder on start; they are git-ignored.
 
+## License
+
+Apache-2.0 (see `LICENSE`), the same as Herdr. `my-files` is modified from Herdr's `files` mod, and
+`my-prs/diff.js` copies its diff rows from Herdr's `changes` mod; both come from
+[herdr-app](https://github.com/herdrdev/herdr-app) under Apache-2.0, and those files say so at the top.
+
 ## Development
 
 ```sh

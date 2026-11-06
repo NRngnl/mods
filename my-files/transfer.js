@@ -1,3 +1,4 @@
+// Part of my-files, modified from Herdr's `files` mod (herdr-app, Apache-2.0).
 // Upload/download files and folders between this Mac and a remote space's machine with scp -r.
 import { exec, hc, home, notify } from "herdr";
 
