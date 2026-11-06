@@ -4,6 +4,7 @@ import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { spaces, panes, exec, run } from "herdr";
 import { toggleDiff } from "./diff.js";
+import { loadChecks, failedCount } from "./checks.js";
 
 const METHODS = [
   ["squashMergeAllowed", "squash", "Squash"],
@@ -194,11 +195,17 @@ function worktreeButton(view, pr, t) {
   return row;
 }
 
+function checksLabel(view, pr) {
+  const c = view.checks?.url === pr.url ? view.checks : null;
+  const failed = c?.list ? failedCount(c.list) : 0;
+  return failed ? `Actions ✗${failed}` : "Actions";
+}
+
 // View tabs (what the body shows) apart from actions (what changes the PR or disk).
 function tabs(view, pr, t) {
   const diffOn = view.diff?.url === pr.url && view.diff.show;
   const c = view.comments?.url === pr.url ? view.comments : null;
-  const current = diffOn ? "diff" : view.showComments ? "comments" : "desc";
+  const current = diffOn ? "diff" : view.showChecks ? "checks" : view.showComments ? "comments" : "desc";
   const tab = (id, label, onClick) =>
     div()
       .id(`prs-tab-${id}`)
@@ -221,13 +228,13 @@ function tabs(view, pr, t) {
     .text_size(12)
     .child(
       tab("desc", "Description", () => {
-        view.showComments = false;
+        view.showComments = view.showChecks = false;
         if (view.diff) view.diff.show = false;
       }),
     )
     .child(
       tab("diff", view.diff?.url === pr.url && view.diff.loading ? "Diff…" : "Diff", cx => {
-        view.showComments = false;
+        view.showComments = view.showChecks = false;
         if (view.diff?.url === pr.url) view.diff.show = true;
         else {
           const on = view.openOn;
@@ -245,7 +252,27 @@ function tabs(view, pr, t) {
     .child(
       tab("comments", `Comments${c?.timeline ? ` ${c.timeline.length}` : ""}`, () => {
         view.showComments = true;
+        view.showChecks = false;
         if (view.diff) view.diff.show = false;
+      }),
+    )
+    .child(
+      tab("checks", checksLabel(view, pr), cx => {
+        view.showChecks = true;
+        view.showComments = false;
+        if (view.diff) view.diff.show = false;
+        // Fetched each time the tab is opened, so a running job's result shows on the next visit.
+        const on = view.openOn;
+        cx.spawn(async cx => {
+          let c;
+          try {
+            c = { list: await loadChecks(pr, on) };
+          } catch (err) {
+            c = { error: String(err.message ?? err) };
+          }
+          if (view.open?.url === pr.url) view.checks = { url: pr.url, ...c };
+          cx.notify();
+        });
       }),
     );
 }

@@ -42,7 +42,8 @@ Click a row. The header has the repo, review state, exact local times, CI and li
   files, or ✓ in sync. **Sync ↓N** fast-forwards when that is safe; diverged or dirty
   worktrees are left to you.
 - Tabs: **Description**, **Diff** (files, hunks and inline review threads; ↑ Prev / ↓ Next jump
-  between threads, across files) and **Comments** (newest first).
+  between threads, across files), **Comments** (newest first) and **Actions** (every check on the
+  latest commit, failed first, as colored ✗ ● ✓ ⤼; click one to open its log).
 
 ## Header switches
 
@@ -61,12 +62,12 @@ PR keeps using the machine it came from.
 
 ## GitHub rate limits
 
-- The lists are one GraphQL request per refresh (1 point of 5,000/hour), once a minute and only while
+- The lists are one GraphQL request per refresh (2 points of 5,000/hour), once a minute and only while
   the window is in front.
 - It pauses until the reset when fewer than 300 points are left, waits 10 minutes after a
   rate-limit error, and backs off up to 15 minutes after other failures. The header says
   `paused to HH:MM`.
-- Comments, diffs and worktree checks run only when you open a PR. Follow looks in the lists
+- Comments, diffs, Actions and worktree checks run only when you open them. Follow looks in the lists
   first and caches other branches for 5 minutes.
 
 ## Requirements

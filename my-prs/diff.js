@@ -102,10 +102,10 @@ export async function toggleDiff(view, pr, on) {
   const threads = view.comments?.url === pr.url ? view.comments.threads : [];
   if (view.diff?.url === pr.url) {
     view.diff.show = !view.diff.show;
-    view.showComments = false;
+    view.showComments = view.showChecks = false;
     return "";
   }
-  view.showComments = false;
+  view.showComments = view.showChecks = false;
   view.diff = { url: pr.url, show: true, files: [], rows: [], width: 300, loading: true, threads };
   view.diff.scroll = VirtualListScrollHandle.new();
   const r = await exec("gh", ["pr", "diff", pr.url, "--color=never"], { on });
