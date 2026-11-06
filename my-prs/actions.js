@@ -19,6 +19,10 @@ cd "$1"; top=$(git rev-parse --show-toplevel); b="$2"; n="$3"
 git worktree prune
 wt=$(git worktree list --porcelain | awk -v r="refs/heads/$b" '/^worktree /{p=substr($0,10)} $0=="branch "r{print p; exit}')
 fetch() { if [ "$4" = true ]; then git fetch -q origin "pull/$n/head"; else git fetch -q origin "$b"; fi; }
+if [ "$5" = remove ]; then
+  # git refuses on uncommitted changes (no --force); the branch and its commits are kept.
+  [ -n "$wt" ] && git worktree remove "$wt" && printf %s "$wt"; exit $?
+fi
 if [ "$5" = find ]; then
   # path, then "ahead behind dirty" against the PR head (fetched now, so the counts are current)
   [ -z "$wt" ] && exit 0
@@ -152,7 +156,7 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
           cx.spawn(async cx => {
             try {
               view.msg = { ok: true, text: await act(on) };
-              if (!["worktree", "sync", "diff", "comments"].includes(id)) view.refresh(cx);
+              if (!["worktree", "sync", "remove", "diff", "comments"].includes(id)) view.refresh(cx);
             } catch (err) {
               view.msg = { ok: false, text: String(err.message ?? err) };
             } finally {
@@ -164,6 +168,19 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
         }),
     )
     .child(view.busy === label || !act ? `${label}…` : asking ? `Confirm ${label.toLowerCase()}?` : label);
+}
+
+// Closes its space, then removes the checkout; unpushed commits stay on the branch, so refuse those too.
+async function removeWorktree(view, pr, on) {
+  const w = view.wt;
+  if (w.ahead) throw new Error(`remove: ${w.ahead} unpushed commit(s); push first`);
+  const inside = p => p === w.path || p?.startsWith(`${w.path}/`);
+  for (const s of spaces().filter(s => (s.machine ?? null) === on))
+    if (inside(s.folder) || panes().some(p => s.tabs.some(t => t.id === p.tab) && inside(p.cwd)))
+      run("space.close", { id: s.id });
+  const { out } = await worktree(pr, on, "remove");
+  view.wt = { url: pr.url };
+  return `Removed worktree ${out.replace(/^.*\/\.herdr\/worktrees\//, "")} (branch kept)`;
 }
 
 // Open always (reopens a closed space); the ahead/behind status; Sync only when it can fast-forward.
@@ -191,6 +208,7 @@ function worktreeButton(view, pr, t) {
         .text_color(t.dim)
         .child(w.ahead ? "diverged" : "commit or stash first"),
     );
+  row.child(button(view, "remove", "✕ Remove", t, on => removeWorktree(view, pr, on), { confirm: true }));
   return row;
 }
 

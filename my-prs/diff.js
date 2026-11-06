@@ -217,7 +217,7 @@ function jumpBar(state, t) {
     .border_b(1)
     .border_color(t.border)
     .text_size(11)
-    .child(div().text_color(t.ansi4).child(`💬 ${pos}/${total} comments`))
+    .child(div().text_color(t.ansi4).child(`✉ ${pos}/${total} comments`))
     .child(div().flex_1())
     .child(btn("prs-prev-comment", "↑ Prev", -1))
     .child(btn("prs-next-comment", "↓ Next", 1));
@@ -270,7 +270,7 @@ export function diffView(state, t) {
                   )
                   .child(div().max_w(260).min_w(0).truncate().child(name)),
               )
-              .when(Boolean(f.threads), e => e.child(div().text_size(11).text_color(t.ansi4).child(`💬${f.threads}`)))
+              .when(Boolean(f.threads), e => e.child(div().text_size(11).text_color(t.ansi4).child(`✉${f.threads}`)))
               .when(f.add > 0, e => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`)))
               .when(f.del > 0, e => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
           }),
