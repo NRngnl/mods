@@ -15,6 +15,8 @@ const METHODS = [
 // then fast-forwards it to the PR head; local commits or edits are left alone.
 const WORKTREE = `set -e
 cd "$1"; top=$(git rev-parse --show-toplevel); b="$2"; n="$3"
+# Forget worktrees whose folder another app already deleted, so they are not reused.
+git worktree prune
 wt=$(git worktree list --porcelain | awk -v r="refs/heads/$b" '/^worktree /{p=substr($0,10)} $0=="branch "r{print p; exit}')
 if [ "$5" = find ]; then printf %s "$wt"; exit 0; fi
 if [ "$4" = true ]; then git fetch -q origin "pull/$n/head"; else git fetch -q origin "$b"; fi
@@ -112,7 +114,7 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
           cx.spawn(async cx => {
             try {
               view.msg = { ok: true, text: await act(on) };
-              if (!["worktree", "sync", "diff"].includes(id)) view.refresh(cx);
+              if (!["worktree", "sync", "diff", "comments"].includes(id)) view.refresh(cx);
             } catch (err) {
               view.msg = { ok: false, text: String(err.message ?? err) };
             } finally {
@@ -124,6 +126,16 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
         }),
     )
     .child(view.busy === label ? `${label}…` : asking ? `Confirm ${label.toLowerCase()}?` : label);
+}
+
+function commentsButton(view, pr, t) {
+  const c = view.comments?.url === pr.url ? view.comments : null;
+  const label = view.showComments ? "Description" : `Comments${c?.timeline ? ` (${c.timeline.length})` : ""}`;
+  return button(view, "comments", label, t, () => {
+    view.showComments = !view.showComments;
+    if (view.diff) view.diff.show = false;
+    return "";
+  });
 }
 
 function worktreeButton(view, pr, t) {
@@ -141,6 +153,7 @@ export function actions(view, pr, t) {
         toggleDiff(view, pr, on),
       ),
     );
+    row.child(commentsButton(view, pr, t));
     row.child(worktreeButton(view, pr, t));
     if (view.msg)
       row.child(
@@ -161,6 +174,7 @@ export function actions(view, pr, t) {
       toggleDiff(view, pr, on),
     ),
   );
+  row.child(commentsButton(view, pr, t));
   row.child(worktreeButton(view, pr, t));
   if (!mergeable)
     row.child(

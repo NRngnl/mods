@@ -1,7 +1,8 @@
 // In-panel PR diff, drawn like Herdr's Changes mod: a file list, then a virtual list of numbered rows.
 import { div } from "gpui-kit";
-import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
+import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { exec, settings } from "herdr";
+import { threadRows } from "./comments.js";
 
 const MAX_LINES = 1500,
   MAX_COLS = 4000;
@@ -58,28 +59,80 @@ function select(state, path) {
   const lines = (state.files.find(f => f.path === path)?.lines ?? [])
     .slice(0, MAX_LINES)
     .map(l => (l.length > MAX_COLS ? `${l.slice(0, MAX_COLS)}… (line truncated)` : l));
-  state.rows = diffRows(lines);
+  const rows = diffRows(lines);
+  // Inline threads go under the line they point at; outdated ones (no line) at the top.
+  const threads = (state.threads ?? []).filter(th => th.path === path);
+  const at = new Map();
+  for (const th of threads) {
+    const i =
+      th.line == null
+        ? -1
+        : rows.findIndex(r => r.number === th.line && (th.diffSide === "LEFT" ? r.kind !== "+" : r.kind !== "-"));
+    at.set(i, [...(at.get(i) ?? []), ...threadRows(th)]);
+  }
+  state.rows = [...(at.get(-1) ?? []), ...rows.flatMap((r, i) => [r, ...(at.get(i) ?? [])])];
+  state.heads = state.rows.flatMap((r, i) => (r.head ? [i] : []));
   state.width = Math.max(300, ...lines.map(l => l.length * 7 + 50));
+}
+
+// GitHub refuses whole diffs over its size limit; the files API still returns each file's patch
+// (up to 3,000 files; a single huge file comes back without one).
+async function perFile(pr, on) {
+  const [, repo, n] = pr.url.match(/github\.com\/(.+?\/.+?)\/pull\/(\d+)/);
+  const jq = ".[] | {path: .filename, status, add: .additions, del: .deletions, patch}";
+  const r = await exec("gh", ["api", "--paginate", `repos/${repo}/pulls/${n}/files?per_page=100`, "--jq", jq], { on });
+  if (r.code !== 0) throw new Error(`diff: ${r.stderr.trim() || "failed"}`);
+  const STATUS = { added: "A", removed: "D" };
+  return r.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map(l => JSON.parse(l))
+    .map(f => ({
+      path: f.path,
+      status: STATUS[f.status] ?? "M",
+      add: f.add,
+      del: f.del,
+      lines: f.patch ? f.patch.split("\n") : ["Diff too large to show for this file"],
+    }));
 }
 
 // Toggles the diff for `pr`; fetches it (gh on that machine) only the first time it is shown.
 export async function toggleDiff(view, pr, on) {
+  const threads = view.comments?.url === pr.url ? view.comments.threads : [];
   if (view.diff?.url === pr.url) {
     view.diff.show = !view.diff.show;
+    view.showComments = false;
     return "";
   }
-  view.diff = { url: pr.url, show: true, files: [], rows: [], width: 300, loading: true };
+  view.showComments = false;
+  view.diff = { url: pr.url, show: true, files: [], rows: [], width: 300, loading: true, threads };
+  view.diff.scroll = VirtualListScrollHandle.new();
   const r = await exec("gh", ["pr", "diff", pr.url, "--color=never"], { on });
   const state = view.diff?.url === pr.url ? view.diff : null;
   if (!state) return "";
   state.loading = false;
-  if (r.code !== 0) throw new Error(`diff: ${r.stderr.trim() || "failed (too large?)"}`);
-  state.files = parse(r.stdout);
+  if (r.code === 0) state.files = parse(r.stdout);
+  else if (/too_large|406/.test(r.stderr)) state.files = await perFile(pr, on);
+  else throw new Error(`diff: ${r.stderr.trim() || "failed"}`);
+  for (const f of state.files) f.threads = threads.filter(th => th.path === f.path).length;
   if (state.files.length) select(state, state.files[0].path);
   return "";
 }
 
-function row({ kind, number, text }, t) {
+function row({ kind, number, text, head, author, resolved }, t) {
+  if (kind === "c")
+    return div()
+      .w_full()
+      .h(20)
+      .flex_none()
+      .pl(40)
+      .truncate()
+      .bg(`${t.ansi4}14`)
+      .border_l(2)
+      .border_color(resolved ? t.border : t.ansi4)
+      .text_color(head ? (resolved ? t.dim : t.ansi3) : author ? t.accent : resolved ? t.dim : t.foreground)
+      .when(Boolean(author), e => e.font_semibold())
+      .child(text);
   if (kind === "@")
     return div().w_full().px(12).h(20).flex_none().truncate().bg(t.raised).text_color(t.dim).child(text);
   return h_flex()
@@ -98,6 +151,76 @@ function row({ kind, number, text }, t) {
         .child(number === undefined ? "" : String(number)),
     )
     .child(div().flex_1().min_w(0).truncate().child(text));
+}
+
+// Every thread across files, in file order: [{ path, row }].
+function allThreads(state) {
+  const out = [];
+  for (const f of state.files) {
+    if (!f.threads) continue;
+    if (f.path === state.open) out.push(...state.heads.map(row => ({ path: f.path, row })));
+    else for (let i = 0; i < f.threads; i++) out.push({ path: f.path, row: null, n: i });
+  }
+  return out;
+}
+
+// Moves to the previous (-1) or next (+1) inline thread, switching files when needed.
+function jump(state, step) {
+  const list = allThreads(state);
+  if (!list.length) return;
+  const here = list.findIndex(x => x.path === state.open && x.row === state.heads[state.at ?? -1]);
+  let i = here < 0 ? (step > 0 ? list.findIndex(x => x.path === state.open) : -1) : here + step;
+  if (here < 0 && step > 0 && i < 0) i = 0;
+  i = (i + list.length) % list.length;
+  const target = list[i];
+  if (target.path !== state.open) {
+    select(state, target.path);
+    state.at = step > 0 ? 0 : state.heads.length - 1;
+  } else state.at = state.heads.indexOf(target.row);
+  state.scroll.scroll_to_item(state.heads[state.at], "center");
+}
+
+function jumpBar(state, t) {
+  const total = state.files.reduce((n, f) => n + (f.threads || 0), 0);
+  if (!total) return div();
+  const before = state.files
+    .slice(
+      0,
+      state.files.findIndex(f => f.path === state.open),
+    )
+    .reduce((n, f) => n + (f.threads || 0), 0);
+  const pos = state.at == null ? "–" : String(before + state.at + 1);
+  const btn = (id, label, step) =>
+    div()
+      .id(id)
+      .px(8)
+      .h(22)
+      .flex()
+      .items_center()
+      .rounded(6)
+      .border_1()
+      .border_color(t.border)
+      .cursor_pointer()
+      .text_color(t.muted)
+      .hover(s => s.bg(t.hover).text_color(t.accent))
+      .on_click((_e, cx) => {
+        jump(state, step);
+        cx.notify();
+      })
+      .child(label);
+  return h_flex()
+    .flex_none()
+    .px(10)
+    .py(4)
+    .gap(6)
+    .items_center()
+    .border_b(1)
+    .border_color(t.border)
+    .text_size(11)
+    .child(div().text_color(t.ansi4).child(`💬 ${pos}/${total} comments`))
+    .child(div().flex_1())
+    .child(btn("prs-prev-comment", "↑ Prev", -1))
+    .child(btn("prs-next-comment", "↓ Next", 1));
 }
 
 export function diffView(state, t) {
@@ -131,6 +254,7 @@ export function diffView(state, t) {
               .hover(s => s.bg(t.hover))
               .on_click((_e, cx) => {
                 select(state, f.path);
+                state.at = null;
                 cx.notify();
               })
               .child(div().w(14).text_size(11).text_color(color[f.status]).child(f.status))
@@ -146,6 +270,7 @@ export function diffView(state, t) {
                   )
                   .child(div().max_w(260).min_w(0).truncate().child(name)),
               )
+              .when(Boolean(f.threads), e => e.child(div().text_size(11).text_color(t.ansi4).child(`💬${f.threads}`)))
               .when(f.add > 0, e => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`)))
               .when(f.del > 0, e => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
           }),
@@ -159,6 +284,7 @@ export function diffView(state, t) {
           ),
         ),
     )
+    .child(jumpBar(state, t))
     .child(
       div()
         .flex_1()
@@ -183,7 +309,9 @@ export function diffView(state, t) {
                     20,
                     i => String(i),
                     range => state.rows.slice(range.start, range.end).map(r => row(r, t)),
-                  ).size_full(),
+                  )
+                    .track_scroll(state.scroll)
+                    .size_full(),
                 ),
             ),
         )

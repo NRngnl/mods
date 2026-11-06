@@ -5,6 +5,7 @@ import { v_flex, h_flex, TextView } from "gpui-base";
 import { spaces, focused, exec, theme, window } from "herdr";
 import { actions, findWorktree } from "./actions.js";
 import { diffView } from "./diff.js";
+import { loadComments, commentsMarkdown } from "./comments.js";
 
 function machine() {
   const space = spaces().find(s => s.active),
@@ -58,31 +59,55 @@ function nextAllowed(rate, failures, err) {
 export default class Prs extends View {
   init(_props, cx) {
     this.lists = null;
+    this.cache = new Map();
     this.failures = 0;
     this.next = 0;
     this.refresh(cx);
     // Tick often but only fetch when due, and only while the window is in front.
     cx.timer.every(15000, cx => {
-      if (window()?.active && Date.now() >= this.next) this.refresh(cx);
+      if (window()?.active && Date.now() >= this.next) this.refresh(cx, false);
     });
   }
 
-  refresh(cx) {
-    const on = machine();
-    if (this.loading && on === this.on) return; // never two requests at once
-    // A new machine means a different gh account: drop the old lists instead of showing them as current.
-    if (on !== this.on) {
-      this.lists = null;
-      this.open = null;
-      this.error = null;
-      this.updated = null;
-    }
+  // Each machine (its own gh account) keeps its lists and refresh schedule; switching swaps them.
+  swap(on) {
+    const KEYS = ["lists", "rate", "updated", "failures", "next", "error"];
+    if (this.on !== undefined) this.cache.set(this.on, Object.fromEntries(KEYS.map(k => [k, this[k]])));
+    const saved = this.cache.get(on) ?? { lists: null, failures: 0, next: 0 };
+    for (const k of KEYS) this[k] = saved[k] ?? null;
+    this.failures ??= 0;
+    this.next ??= 0;
     this.on = on;
+    this.open = null;
+    this.loading = false;
+  }
+
+  refresh(cx, force = true) {
+    const on = machine();
+    if (on !== this.on) {
+      this.swap(on);
+      force = false;
+    }
+    if (this.loading) return; // never two requests at once
+    if (!force && this.lists && Date.now() < this.next) return; // cached and fresh enough; render already shows the swapped-in lists
     this.loading = true;
     cx.spawn(async cx => {
       try {
         const { lists, rate } = await load(on);
-        if (this.on !== on) return;
+        if (this.on !== on) {
+          // Switched away while loading: keep the result for when you come back.
+          const saved = this.cache.get(on) ?? {};
+          this.cache.set(on, {
+            ...saved,
+            lists,
+            rate,
+            updated: new Date(),
+            failures: 0,
+            error: null,
+            next: nextAllowed(rate, 0),
+          });
+          return;
+        }
         this.lists = lists;
         this.rate = rate;
         this.failures = 0;
@@ -124,7 +149,19 @@ export default class Prs extends View {
         this.open = pr;
         this.msg = this.confirm = null;
         this.wt = null;
+        this.comments = null;
+        this.showComments = false;
         const on = this.on;
+        cx.spawn(async cx => {
+          let c;
+          try {
+            c = await loadComments(pr, on);
+          } catch (err) {
+            c = { error: String(err.message ?? err), threads: [] };
+          }
+          if (this.open?.url === pr.url) this.comments = { url: pr.url, ...c };
+          cx.notify();
+        });
         cx.spawn(async cx => {
           const path = await findWorktree(pr, on);
           if (this.open?.url === pr.url) this.wt = { url: pr.url, path };
@@ -228,7 +265,12 @@ export default class Prs extends View {
       .child(
         this.diff?.url === pr.url && this.diff.show
           ? diffView(this.diff, t)
-          : TextView.markdown(`prs-body-${pr.url}`, pr.body?.trim() || "_No description._")
+          : TextView.markdown(
+              `prs-${this.showComments ? "comments" : "body"}-${pr.url}`,
+              this.showComments
+                ? commentsMarkdown(this.comments?.url === pr.url ? this.comments : null)
+                : pr.body?.trim() || "_No description._",
+            )
               .selectable()
               .scrollable()
               .flex_1()
