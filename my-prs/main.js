@@ -3,7 +3,8 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
 import { spaces, focused, exec, theme, window } from "herdr";
-import { actions } from "./actions.js";
+import { actions, findWorktree } from "./actions.js";
+import { diffView } from "./diff.js";
 
 function machine() {
   const space = spaces().find(s => s.active),
@@ -122,6 +123,13 @@ export default class Prs extends View {
       .on_click((_e, cx) => {
         this.open = pr;
         this.msg = this.confirm = null;
+        this.wt = null;
+        const on = this.on;
+        cx.spawn(async cx => {
+          const path = await findWorktree(pr, on);
+          if (this.open?.url === pr.url) this.wt = { url: pr.url, path };
+          cx.notify();
+        });
         cx.notify();
       })
       .child(div().w(12).flex_none().text_color(t[color]).child(icon))
@@ -218,13 +226,15 @@ export default class Prs extends View {
           .child(actions(this, pr, t)),
       )
       .child(
-        TextView.markdown(`prs-body-${pr.url}`, pr.body?.trim() || "_No description._")
-          .selectable()
-          .scrollable()
-          .flex_1()
-          .min_h(0)
-          .p(12)
-          .on_link_click((url, cx) => cx.open_url(url)),
+        this.diff?.url === pr.url && this.diff.show
+          ? diffView(this.diff, t)
+          : TextView.markdown(`prs-body-${pr.url}`, pr.body?.trim() || "_No description._")
+              .selectable()
+              .scrollable()
+              .flex_1()
+              .min_h(0)
+              .p(12)
+              .on_link_click((url, cx) => cx.open_url(url)),
       );
   }
 

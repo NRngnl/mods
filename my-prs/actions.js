@@ -3,6 +3,7 @@
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, exec, run } from "herdr";
+import { toggleDiff } from "./diff.js";
 
 const METHODS = [
   ["squashMergeAllowed", "squash", "Squash"],
@@ -10,17 +11,22 @@ const METHODS = [
   ["rebaseMergeAllowed", "rebase", "Rebase"],
 ];
 
-// Reuses a worktree already on the branch; otherwise adds <repo>-pr-<n> beside the checkout.
+// Reuses a worktree already on the branch (else adds <repo>-pr-<n> beside the checkout),
+// then fast-forwards it to the PR head; local commits or edits are left alone.
 const WORKTREE = `set -e
 cd "$1"; top=$(git rev-parse --show-toplevel); b="$2"; n="$3"
 wt=$(git worktree list --porcelain | awk -v r="refs/heads/$b" '/^worktree /{p=substr($0,10)} $0=="branch "r{print p; exit}')
+if [ "$5" = find ]; then printf %s "$wt"; exit 0; fi
+if [ "$4" = true ]; then git fetch -q origin "pull/$n/head"; else git fetch -q origin "$b"; fi
+head=$(git rev-parse FETCH_HEAD)
 if [ -z "$wt" ]; then
+  [ "$5" = sync ] && { echo "worktree no longer exists" >&2; exit 1; }
   wt="$(dirname "$top")/$(basename "$top")-pr-$n"
-  if [ "$4" = true ]; then git fetch -q origin "pull/$n/head:$b"; else git fetch -q origin "$b"; fi
   if git show-ref -q --verify "refs/heads/$b"; then git worktree add -q "$wt" "$b"
-  else git worktree add -q --track -b "$b" "$wt" "origin/$b"; fi
+  else git worktree add -q -b "$b" "$wt" "$head"; [ "$4" = true ] || git -C "$wt" branch -q -u "origin/$b"; fi
 fi
-printf %s "$wt"`;
+if git -C "$wt" merge -q --ff-only "$head" >/dev/null 2>&1; then note="up to date"; else note="not updated (local changes or diverged)"; fi
+printf '%s\\n%s' "$wt" "$note"`;
 
 const repoOf = url => url.match(/github\.com[:/](.+?\/.+?)(?:\.git)?\/?$/)?.[1]?.toLowerCase();
 
@@ -37,14 +43,32 @@ async function projectSpace(repo, on) {
   throw new Error(`No space on ${on ?? "local"} is a checkout of ${repo}`);
 }
 
-async function openWorktree(pr, on) {
+async function worktree(pr, on, mode) {
   const space = await projectSpace(pr.repository.nameWithOwner, on);
   const branch = pr.isCrossRepository ? `pr-${pr.number}` : pr.headRefName;
-  const args = ["-c", WORKTREE, "wt", space.folder, branch, String(pr.number), String(pr.isCrossRepository)];
-  const wt = await check(await exec("sh", args, { on }), "worktree");
+  const args = ["-c", WORKTREE, "wt", space.folder, branch, String(pr.number), String(pr.isCrossRepository), mode];
+  return { space, out: await check(await exec("sh", args, { on }), "worktree") };
+}
+
+// The PR's worktree path on disk, or null. Local git only, no network.
+export const findWorktree = (pr, on) =>
+  worktree(pr, on, "find").then(
+    r => r.out || null,
+    () => null,
+  );
+
+async function syncWorktree(view, pr, on) {
+  const { out } = await worktree(pr, on, "sync");
+  return `Synced ${out.split("\n")[0].split("/").pop()}: ${out.split("\n")[1]}`;
+}
+
+async function openWorktree(view, pr, on) {
+  const { space, out } = await worktree(pr, on, "open");
+  const [wt, note] = out.split("\n");
+  view.wt = { url: pr.url, path: wt };
   run("space.select", { id: space.id });
   run("tab.new", { space: space.id, folder: wt, name: `#${pr.number}` });
-  return `Opened ${wt.split("/").pop()} in ${space.name}`;
+  return `Opened ${wt.split("/").pop()} in ${space.name}, ${note}`;
 }
 
 const merge = async (pr, method, on) =>
@@ -88,7 +112,7 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
           cx.spawn(async cx => {
             try {
               view.msg = { ok: true, text: await act(on) };
-              if (id !== "worktree") view.refresh(cx);
+              if (!["worktree", "sync", "diff"].includes(id)) view.refresh(cx);
             } catch (err) {
               view.msg = { ok: false, text: String(err.message ?? err) };
             } finally {
@@ -102,10 +126,22 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
     .child(view.busy === label ? `${label}…` : asking ? `Confirm ${label.toLowerCase()}?` : label);
 }
 
+function worktreeButton(view, pr, t) {
+  const path = view.wt?.url === pr.url ? view.wt.path : null;
+  return path
+    ? button(view, "sync", "Sync", t, on => syncWorktree(view, pr, on))
+    : button(view, "worktree", "Worktree", t, on => openWorktree(view, pr, on));
+}
+
 export function actions(view, pr, t) {
   const row = h_flex().flex_wrap().gap(6).items_center();
   if (pr.state !== "OPEN") {
-    row.child(button(view, "worktree", "Worktree", t, on => openWorktree(pr, on)));
+    row.child(
+      button(view, "diff", view.diff?.url === pr.url && view.diff.show ? "Description" : "Diff", t, on =>
+        toggleDiff(view, pr, on),
+      ),
+    );
+    row.child(worktreeButton(view, pr, t));
     if (view.msg)
       row.child(
         div()
@@ -120,7 +156,12 @@ export function actions(view, pr, t) {
     if (pr.repository[flag])
       row.child(button(view, method, label, t, on => merge(pr, method, on), { confirm: true, enabled: mergeable }));
   if (!pr.viewerDidAuthor) row.child(button(view, "approve", "Approve", t, on => approve(pr, on), { confirm: true }));
-  row.child(button(view, "worktree", "Worktree", t, on => openWorktree(pr, on)));
+  row.child(
+    button(view, "diff", view.diff?.url === pr.url && view.diff.show ? "Description" : "Diff", t, on =>
+      toggleDiff(view, pr, on),
+    ),
+  );
+  row.child(worktreeButton(view, pr, t));
   if (!mergeable)
     row.child(
       div()
