@@ -15,7 +15,7 @@ function machine() {
 
 const FIELDS = `nodes { ... on PullRequest { number title url state isDraft reviewDecision body additions deletions changedFiles
   headRefName isCrossRepository mergeable viewerDidAuthor
-  repository { nameWithOwner squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } }`;
+  repository { nameWithOwner squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed } commits(last: 1) { nodes { commit { statusCheckRollup { state contexts { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } } } }`;
 const QUERY = `{
   rateLimit { remaining resetAt }
   mine: search(query: "is:pr is:open author:@me archived:false sort:updated-desc", type: ISSUE, first: 30) { ${FIELDS} }
@@ -131,6 +131,41 @@ export default class Prs extends View {
     });
   }
 
+  // Check runs and commit statuses grouped as passed / failed / skipped / remaining.
+  ciCounts(pr, t) {
+    const ctx = pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts;
+    if (!ctx) return div();
+    const GROUP = {
+      SUCCESS: "ok",
+      NEUTRAL: "ok",
+      COMPLETED: "ok",
+      FAILURE: "fail",
+      ERROR: "fail",
+      TIMED_OUT: "fail",
+      STARTUP_FAILURE: "fail",
+      CANCELLED: "fail",
+      ACTION_REQUIRED: "fail",
+      SKIPPED: "skip",
+      STALE: "skip",
+    };
+    const n = { ok: 0, fail: 0, skip: 0, left: 0 };
+    for (const { state, count } of [...ctx.checkRunCountsByState, ...ctx.statusContextCountsByState])
+      n[GROUP[state] ?? "left"] += count;
+    const total = n.ok + n.fail + n.skip + n.left;
+    if (!total) return div();
+    const parts = [
+      [`${n.ok + n.fail}/${total}`, t.muted],
+      n.fail && [`✗${n.fail}`, t.ansi1],
+      n.skip && [`⤼${n.skip}`, t.dim],
+      n.left && [`●${n.left}`, t.ansi3],
+    ].filter(Boolean);
+    return h_flex()
+      .flex_none()
+      .gap(4)
+      .text_size(11)
+      .children(parts.map(([text, color]) => div().text_color(color).child(text)));
+  }
+
   row(pr, t) {
     const [icon, color] = CI[pr.commits.nodes[0]?.commit.statusCheckRollup?.state] ?? ["–", "dim"];
     const note = [pr.isDraft && "draft", DECISION[pr.reviewDecision]].filter(Boolean).join(" · ");
@@ -183,6 +218,7 @@ export default class Prs extends View {
               .child(`${pr.repository.nameWithOwner}#${pr.number}${note ? ` · ${note}` : ""}`),
           ),
       )
+      .child(this.ciCounts(pr, t))
       .child(this.loc(pr, t))
       .child(
         div()
