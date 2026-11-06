@@ -1,5 +1,6 @@
 // PR conversation and review threads, fetched once when a PR is opened (gh on that machine).
 import { exec } from "herdr";
+import { localTime } from "./time.js";
 
 const QUERY = `query($u: URI!) { resource(url: $u) { ... on PullRequest {
   comments(last: 50) { nodes { author { login } body createdAt } }
@@ -14,7 +15,7 @@ const STATE = {
   DISMISSED: "dismissed",
 };
 const who = c => c.author?.login ?? "ghost";
-const when = c => c.createdAt.slice(0, 16).replace("T", " ");
+const when = c => localTime(c.createdAt);
 
 export async function loadComments(pr, on) {
   const r = await exec("gh", ["api", "graphql", "-f", `query=${QUERY}`, "-f", `u=${pr.url}`], { on });

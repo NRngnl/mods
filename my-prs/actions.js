@@ -1,7 +1,7 @@
 // Detail-view actions: merge, approve, and open the PR's branch as a worktree tab in its project space.
 // Everything runs on the PR list's machine, with that machine's gh and git.
 import { div } from "gpui-kit";
-import { h_flex } from "gpui-base";
+import { h_flex, v_flex } from "gpui-base";
 import { spaces, panes, exec, run } from "herdr";
 import { toggleDiff } from "./diff.js";
 
@@ -166,16 +166,6 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
     .child(view.busy === label || !act ? `${label}…` : asking ? `Confirm ${label.toLowerCase()}?` : label);
 }
 
-function commentsButton(view, pr, t) {
-  const c = view.comments?.url === pr.url ? view.comments : null;
-  const label = view.showComments ? "Description" : `Comments${c?.timeline ? ` (${c.timeline.length})` : ""}`;
-  return button(view, "comments", label, t, () => {
-    view.showComments = !view.showComments;
-    if (view.diff) view.diff.show = false;
-    return "";
-  });
-}
-
 // Open always (reopens a closed space); the ahead/behind status; Sync only when it can fast-forward.
 function worktreeButton(view, pr, t) {
   const w = view.wt?.url === pr.url && view.wt.path ? view.wt : null;
@@ -204,50 +194,88 @@ function worktreeButton(view, pr, t) {
   return row;
 }
 
+// View tabs (what the body shows) apart from actions (what changes the PR or disk).
+function tabs(view, pr, t) {
+  const diffOn = view.diff?.url === pr.url && view.diff.show;
+  const c = view.comments?.url === pr.url ? view.comments : null;
+  const current = diffOn ? "diff" : view.showComments ? "comments" : "desc";
+  const tab = (id, label, onClick) =>
+    div()
+      .id(`prs-tab-${id}`)
+      .px(10)
+      .h(26)
+      .flex()
+      .items_center()
+      .cursor_pointer()
+      .border_b(2)
+      .border_color(current === id ? t.accent : t.background)
+      .text_color(current === id ? t.foreground : t.muted)
+      .hover(s => s.text_color(t.accent))
+      .on_click((_e, cx) => {
+        onClick(cx);
+        cx.notify();
+      })
+      .child(label);
+  return h_flex()
+    .gap(2)
+    .text_size(12)
+    .child(
+      tab("desc", "Description", () => {
+        view.showComments = false;
+        if (view.diff) view.diff.show = false;
+      }),
+    )
+    .child(
+      tab("diff", view.diff?.url === pr.url && view.diff.loading ? "Diff…" : "Diff", cx => {
+        view.showComments = false;
+        if (view.diff?.url === pr.url) view.diff.show = true;
+        else {
+          const on = view.openOn;
+          cx.spawn(async cx => {
+            try {
+              await toggleDiff(view, pr, on);
+            } catch (err) {
+              view.msg = { ok: false, text: String(err.message ?? err) };
+            }
+            cx.notify();
+          });
+        }
+      }),
+    )
+    .child(
+      tab("comments", `Comments${c?.timeline ? ` ${c.timeline.length}` : ""}`, () => {
+        view.showComments = true;
+        if (view.diff) view.diff.show = false;
+      }),
+    );
+}
+
+function note(t, text, color) {
+  return div()
+    .text_size(11)
+    .text_color(color ?? t.dim)
+    .child(text);
+}
+
 export function actions(view, pr, t) {
-  const row = h_flex().flex_wrap().gap(6).items_center();
-  if (pr.state !== "OPEN") {
-    row.child(
-      button(view, "diff", view.diff?.url === pr.url && view.diff.show ? "Description" : "Diff", t, on =>
-        toggleDiff(view, pr, on),
-      ),
-    );
-    row.child(commentsButton(view, pr, t));
-    row.child(worktreeButton(view, pr, t));
-    if (view.msg)
-      row.child(
-        div()
-          .text_size(11)
-          .text_color(view.msg.ok ? t.ansi2 : t.ansi1)
-          .child(view.msg.text),
+  const open = pr.state === "OPEN";
+  const mergeable = open && !pr.isDraft && pr.mergeable === "MERGEABLE";
+  const act = h_flex().flex_wrap().gap(6).items_center();
+  if (open) {
+    for (const [flag, method, label] of METHODS)
+      if (pr.repository[flag])
+        act.child(button(view, method, label, t, on => merge(pr, method, on), { confirm: true, enabled: mergeable }));
+    if (!pr.viewerDidAuthor) act.child(button(view, "approve", "Approve", t, on => approve(pr, on), { confirm: true }));
+    if (!mergeable)
+      act.child(
+        note(t, pr.isDraft ? "draft" : pr.mergeable === "UNKNOWN" ? "checking mergeability…" : "has conflicts"),
       );
-    return row;
   }
-  const mergeable = !pr.isDraft && pr.mergeable === "MERGEABLE";
-  for (const [flag, method, label] of METHODS)
-    if (pr.repository[flag])
-      row.child(button(view, method, label, t, on => merge(pr, method, on), { confirm: true, enabled: mergeable }));
-  if (!pr.viewerDidAuthor) row.child(button(view, "approve", "Approve", t, on => approve(pr, on), { confirm: true }));
-  row.child(
-    button(view, "diff", view.diff?.url === pr.url && view.diff.show ? "Description" : "Diff", t, on =>
-      toggleDiff(view, pr, on),
-    ),
-  );
-  row.child(commentsButton(view, pr, t));
-  row.child(worktreeButton(view, pr, t));
-  if (!mergeable)
-    row.child(
-      div()
-        .text_size(11)
-        .text_color(t.dim)
-        .child(pr.isDraft ? "draft" : pr.mergeable === "UNKNOWN" ? "checking mergeability…" : "has conflicts"),
-    );
-  if (view.msg)
-    row.child(
-      div()
-        .text_size(11)
-        .text_color(view.msg.ok ? t.ansi2 : t.ansi1)
-        .child(view.msg.text),
-    );
-  return row;
+  act.child(div().flex_1()).child(worktreeButton(view, pr, t));
+  return v_flex()
+    .gap(8)
+    .pt(4)
+    .child(act)
+    .when(Boolean(view.msg), e => e.child(note(t, view.msg.text, view.msg.ok ? t.ansi2 : t.ansi1)))
+    .child(tabs(view, pr, t));
 }

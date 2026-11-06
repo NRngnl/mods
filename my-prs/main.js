@@ -5,6 +5,7 @@ import { v_flex, h_flex, TextView } from "gpui-base";
 import { spaces, focused, exec, theme, window } from "herdr";
 import { actions, findWorktree } from "./actions.js";
 import { diffView } from "./diff.js";
+import { localTime, ago } from "./time.js";
 import { loadComments, commentsMarkdown } from "./comments.js";
 
 function machine() {
@@ -13,9 +14,10 @@ function machine() {
   return f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : (space?.machine ?? null);
 }
 
-const FIELDS = `nodes { ... on PullRequest { number title url state isDraft reviewDecision body additions deletions changedFiles
+const FIELDS = `nodes { ... on PullRequest { number title url state isDraft createdAt reviewDecision body additions deletions changedFiles
   headRefName isCrossRepository mergeable viewerDidAuthor
-  repository { nameWithOwner squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed } commits(last: 1) { nodes { commit { statusCheckRollup { state contexts { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } } } }`;
+  repository { nameWithOwner squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed } comments(last: 1) { nodes { createdAt } } reviews(last: 1) { nodes { submittedAt } }
+  commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state contexts { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } } } }`;
 const QUERY = `{
   rateLimit { remaining resetAt }
   mine: search(query: "is:pr is:open author:@me archived:false sort:updated-desc", type: ISSUE, first: 30) { ${FIELDS} }
@@ -34,7 +36,7 @@ const CI = {
   PENDING: ["●", "ansi3"],
   EXPECTED: ["●", "ansi3"],
 };
-const DECISION = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "needs review" };
+const DECISION = { APPROVED: "✔ approved", CHANGES_REQUESTED: "✎ changes", REVIEW_REQUIRED: "◌ review" };
 
 async function load(on) {
   const r = await exec("gh", ["api", "graphql", "-f", `query=${QUERY}`], { on });
@@ -54,6 +56,14 @@ function nextAllowed(rate, failures, err) {
   if (err && /rate limit|secondary|abuse|403|429/i.test(err)) return now + 10 * MINUTE;
   if (failures) return now + Math.min(15, 2 ** failures) * MINUTE;
   return now + MINUTE;
+}
+
+// Opened, last commit and last comment or review; the latter two only when they exist.
+function times(pr, fmt) {
+  const commit = pr.commits.nodes[0]?.commit.committedDate;
+  const talk = [pr.comments.nodes[0]?.createdAt, pr.reviews.nodes[0]?.submittedAt].filter(Boolean).sort().pop();
+  // ⊕ opened, ⊙ last commit, ✉ last comment or review
+  return [`⊕ ${fmt(pr.createdAt)}`, commit && `⊙ ${fmt(commit)}`, talk && `✉ ${fmt(talk)}`].filter(Boolean).join("   ");
 }
 
 export default class Prs extends View {
@@ -168,14 +178,16 @@ export default class Prs extends View {
 
   row(pr, t) {
     const [icon, color] = CI[pr.commits.nodes[0]?.commit.statusCheckRollup?.state] ?? ["–", "dim"];
-    const note = [pr.isDraft && "draft", DECISION[pr.reviewDecision]].filter(Boolean).join(" · ");
+    const note = [pr.isDraft && "◇ draft", DECISION[pr.reviewDecision]].filter(Boolean).join(" · ");
     return h_flex()
       .id(`pr-${pr.url}`)
-      .h(40)
       .flex_none()
       .px(8)
+      .py(5)
       .gap(8)
-      .items_center()
+      .items_start()
+      .border_b(1)
+      .border_color(t.border)
       .rounded(7)
       .cursor_pointer()
       .hover(s => s.bg(t.hover))
@@ -204,48 +216,60 @@ export default class Prs extends View {
         });
         cx.notify();
       })
-      .child(div().w(12).flex_none().text_color(t[color]).child(icon))
+      .child(div().w(12).flex_none().pt(1).text_color(t[color]).child(icon))
       .child(
         v_flex()
           .flex_1()
           .min_w(0)
-          .child(div().truncate().child(pr.title))
+          .gap(1)
+          // 1: the whole title, wrapped, with Copy at the end of the first line
           .child(
-            div()
-              .truncate()
+            h_flex()
+              .gap(8)
+              .items_start()
+              .child(div().flex_1().min_w(0).truncate().child(pr.title))
+              .child(
+                div()
+                  .id(`copy-${pr.url}`)
+                  .h(20)
+                  .px(6)
+                  .flex_none()
+                  .flex()
+                  .items_center()
+                  .rounded(5)
+                  .border_1()
+                  .border_color(t.border)
+                  .cursor_pointer()
+                  .text_size(11)
+                  .text_color(this.copied === pr.url ? t.ansi2 : t.muted)
+                  .hover(s => s.bg(t.hover).text_color(t.accent))
+                  .on_click((_e, cx) => {
+                    cx.stop_propagation();
+                    cx.write_to_clipboard(pr.url);
+                    this.copied = pr.url;
+                    cx.timer.after(1500, cx => {
+                      if (this.copied === pr.url) this.copied = null;
+                      cx.notify();
+                    });
+                    cx.notify();
+                  })
+                  .child(this.copied === pr.url ? "✓ Copied" : "Copy"),
+              ),
+          )
+          // 2: where it is and what state it is in
+          .child(
+            h_flex()
+              .gap(10)
+              .items_center()
               .text_size(11)
-              .text_color(t.dim)
-              .child(`${pr.repository.nameWithOwner}#${pr.number}${note ? ` · ${note}` : ""}`),
-          ),
-      )
-      .child(this.ciCounts(pr, t))
-      .child(this.loc(pr, t))
-      .child(
-        div()
-          .id(`copy-${pr.url}`)
-          .h(24)
-          .px(8)
-          .flex_none()
-          .flex()
-          .items_center()
-          .rounded(6)
-          .border_1()
-          .border_color(t.border)
-          .cursor_pointer()
-          .text_size(12)
-          .text_color(this.copied === pr.url ? t.ansi2 : t.muted)
-          .hover(s => s.bg(t.hover).text_color(t.accent))
-          .on_click((_e, cx) => {
-            cx.stop_propagation();
-            cx.write_to_clipboard(pr.url);
-            this.copied = pr.url;
-            cx.timer.after(1500, cx => {
-              if (this.copied === pr.url) this.copied = null;
-              cx.notify();
-            });
-            cx.notify();
-          })
-          .child(this.copied === pr.url ? "✓ Copied" : "Copy"),
+              .child(div().min_w(0).truncate().text_color(t.muted).child(`${pr.repository.nameWithOwner}#${pr.number}`))
+              .when(Boolean(note), e => e.child(div().flex_none().text_color(t.dim).child(note)))
+              .child(div().flex_1())
+              .child(this.ciCounts(pr, t))
+              .child(this.loc(pr, t)),
+          )
+          // 3: when things happened
+          .child(div().text_size(11).text_color(t.dim).child(times(pr, ago))),
       );
   }
 
@@ -270,31 +294,52 @@ export default class Prs extends View {
           .border_b(1)
           .border_color(t.border)
           .child(div().font_semibold().child(pr.title))
+          // repo and state on one line, numbers on the next; each item stays whole
           .child(
             h_flex()
-              .gap(8)
+              .flex_wrap()
+              .gap_x(10)
               .items_center()
               .text_size(11)
-              .text_color(t.dim)
-              .child(div().flex_1().min_w(0).truncate().child(`${pr.repository.nameWithOwner}#${pr.number}`))
-              .child(this.loc(pr, t))
-              .child(div().child(`${pr.changedFiles} files`))
+              .text_color(t.muted)
+              .child(div().child(`${pr.repository.nameWithOwner}#${pr.number}`))
+              .when(Boolean(pr.isDraft), e => e.child(div().text_color(t.dim).child("◇ draft")))
+              .when(Boolean(DECISION[pr.reviewDecision]), e =>
+                e.child(div().text_color(t.dim).child(DECISION[pr.reviewDecision])),
+              )
+              .child(div().flex_1())
               .child(
                 div()
                   .id("prs-browser")
-                  .px(8)
-                  .h(22)
+                  .px(6)
+                  .h(20)
                   .flex()
                   .items_center()
-                  .rounded(6)
+                  .rounded(5)
                   .border_1()
                   .border_color(t.border)
                   .cursor_pointer()
-                  .text_color(t.muted)
                   .hover(s => s.bg(t.hover).text_color(t.accent))
                   .on_click((_e, cx) => cx.open_url(pr.url))
                   .child("Open ↗"),
               ),
+          )
+          .child(
+            h_flex()
+              .flex_wrap()
+              .gap_x(12)
+              .items_center()
+              .text_size(11)
+              .text_color(t.dim)
+              .children(
+                times(pr, localTime)
+                  .split("   ")
+                  .map(x => div().child(x)),
+              )
+              .child(div().flex_1())
+              .child(this.ciCounts(pr, t))
+              .child(this.loc(pr, t))
+              .child(div().child(`${pr.changedFiles} files`)),
           )
           .child(actions(this, pr, t)),
       )
