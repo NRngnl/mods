@@ -31,7 +31,7 @@ panel stops it. CodePipeline has no per-request charge, so watching is free on t
 
 ## Logs
 
-Lists log groups (the filter box narrows them as you type). Opening a group shows the events of
+Lists log groups (the filter box narrows them as you type; right-click one to pin it to the top, ◆, per profile). Opening a group shows the events of
 **all its streams** together, oldest first, each with its stream name underneath, like the
 console's "Search log group". From there:
 
