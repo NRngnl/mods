@@ -4,6 +4,7 @@ import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { spaces, panes, exec, run, openOverlay, shared } from "herdr";
 import { toggleDiff } from "./diff.js";
+import { agentsSection } from "./agents.js";
 import { loadChecks, failedCount } from "./checks.js";
 
 const METHODS = [
@@ -360,5 +361,6 @@ export function actions(view, pr, t) {
     .pt(4)
     .child(act)
     .when(Boolean(view.msg), e => e.child(note(t, view.msg.text, view.msg.ok ? t.ansi2 : t.ansi1)))
+    .children([agentsSection(view, pr, t)].filter(Boolean))
     .child(tabs(view, pr, t));
 }
