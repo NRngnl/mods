@@ -98,6 +98,34 @@ async function perFile(pr, on) {
 }
 
 // Toggles the diff for `pr`; fetches it (gh on that machine) only the first time it is shown.
+// A diff state for one commit (GitHub's per-file patches), shown with diffView like the PR's.
+export async function commitDiff(pr, oid, on) {
+  const [, repo] = pr.url.match(/github\.com\/(.+?\/.+?)\/pull\//);
+  const jq =
+    "{message: .commit.message, files: [.files[] | {path: .filename, status, add: .additions, del: .deletions, patch}]}";
+  const r = await exec("gh", ["api", `repos/${repo}/commits/${oid}`, "--jq", jq], { on });
+  if (r.code !== 0) throw new Error(`commit: ${r.stderr.trim() || "failed"}`);
+  const d = JSON.parse(r.stdout);
+  const STATUS = { added: "A", removed: "D" };
+  const state = {
+    files: [],
+    rows: [],
+    width: 300,
+    threads: [],
+    scroll: VirtualListScrollHandle.new(),
+    message: d.message,
+  };
+  state.files = d.files.map(f => ({
+    path: f.path,
+    status: STATUS[f.status] ?? "M",
+    add: f.add,
+    del: f.del,
+    lines: f.patch ? f.patch.split("\n") : ["Diff too large to show for this file"],
+  }));
+  if (state.files.length) select(state, state.files[0].path);
+  return state;
+}
+
 export async function toggleDiff(view, pr, on) {
   const threads = view.comments?.url === pr.url ? view.comments.threads : [];
   if (view.diff?.url === pr.url) {

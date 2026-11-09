@@ -422,7 +422,7 @@ export default class Prs extends View {
         this.diff?.url === pr.url && this.diff.show
           ? diffView(this.diff, t)
           : this.showCommits
-            ? commitsView(this.commits?.url === pr.url ? this.commits : null, t)
+            ? commitsView(this, pr, this.commits?.url === pr.url ? this.commits : null, t)
             : this.showChecks
               ? checksView(this.checks?.url === pr.url ? this.checks : null, t)
               : TextView.markdown(
