@@ -22,7 +22,7 @@ For SSO profiles, run `aws sso login --profile <name>` on that machine first.
 
 ## Pipelines
 
-Lists pipelines; the filter box narrows the list as you type. Click one for its stages and actions with status, source revision, failure
+Lists pipelines; ◇ pins one to the top (◆), per profile. The filter box narrows the list as you type. Click one for its stages and actions with status, source revision, failure
 message, a Details link to the build or deploy, and a Console link.
 
 It updates live like the web console while the pipeline is open: every 3 s with the app focused,

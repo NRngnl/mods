@@ -69,7 +69,7 @@ async function listDirs(on, dir) {
 
 // A list that fills the remaining height and builds only the rows on screen; long log views
 // (thousands of rows) stay responsive. Rows can't carry handlers: clicks go through onClick(key).
-function scroller(id, items, key, render, onClick, uniform = 26) {
+function scroller(id, items, key, render, onClick, uniform = 26, onRight = null) {
   const l = uniform
     ? v_virtual_list(id, items.length, uniform, i => key(items[i]), (rg, cx) => items.slice(rg.start, rg.end).map(x => render(x, cx)))
     : list(id, items.length, i => key(items[i]), (i, cx) => render(items[i], cx));
@@ -77,7 +77,12 @@ function scroller(id, items, key, render, onClick, uniform = 26) {
     .relative()
     .flex_1()
     .min_h(0)
-    .child(l.size_full().when(onClick, e => e.on_item_click((k, cx) => onClick(k, cx))))
+    .child(
+      l
+        .size_full()
+        .when(onClick, e => e.on_item_click((k, cx) => onClick(k, cx)))
+        .when(onRight, e => e.on_item_secondary_click((k, _ev, cx) => onRight(k, cx))),
+    )
     .child(Scrollbar.vertical(id).viewport_from_layout().absolute().inset_0());
 }
 
@@ -113,6 +118,7 @@ export default class Aws extends View {
     this.to.on("submit", abs);
     this.exportDirs = saved.exportDirs ?? {}; // last folder per machine ("" key = local)
     this.exportOn = saved.exportOn ?? null;
+    this.pins = saved.pins ?? {}; // "profile|kind" -> names pinned to the top
     this.exName = InputState.new({ placeholder: "file name" });
     this.newDir = InputState.new({ placeholder: "new folder name" });
     this.newDir.on("submit", (_e, cx) => this.makeDir(cx));
@@ -150,7 +156,7 @@ export default class Aws extends View {
   }
 
   save() {
-    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range, from: this.from.value().trim(), to: this.to.value().trim(), exportDirs: this.exportDirs, exportOn: this.exportOn });
+    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range, from: this.from.value().trim(), to: this.to.value().trim(), exportDirs: this.exportDirs, exportOn: this.exportOn, pins: this.pins });
   }
 
   // Runs one aws call; drops the result if machine/profile/region changed meanwhile.
@@ -199,9 +205,30 @@ export default class Aws extends View {
     const q = this.filter.value().trim().toLowerCase(),
       c = (this.fcache ??= {})[tag];
     if (c && c.items === items && c.q === q) return c.out;
-    const out = (items ?? []).filter(x => !q || name(x).toLowerCase().includes(q));
+    const out = this.pinFirst(tag, (items ?? []).filter(x => !q || name(x).toLowerCase().includes(q)), name);
     this.fcache[tag] = { items, q, out };
     return out;
+  }
+
+  pinned(kind) {
+    return this.pins[`${this.profile}|${kind}`] ?? [];
+  }
+
+  togglePin(kind, name, cx) {
+    const k = `${this.profile}|${kind}`,
+      cur = this.pins[k] ?? [];
+    this.pins = { ...this.pins, [k]: cur.includes(name) ? cur.filter(n => n !== name) : [...cur, name] };
+    this.fcache = {};
+    this.save();
+    cx.notify();
+  }
+
+  // Pinned names first (in pin order), then the rest in their original order.
+  pinFirst(kind, items, name) {
+    const p = this.pinned(kind);
+    if (!p.length) return items;
+    const top = p.map(n => items.find(x => name(x) === n)).filter(Boolean);
+    return [...top, ...items.filter(x => !p.includes(name(x)))];
   }
 
   match(name) {
@@ -540,11 +567,22 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
 
   pipelineView(t, row, back) {
     if (!this.pipeline)
-      return [this.filterBox(), ...(this.pipelines ?? []).filter(p => this.match(p.name)).map(p =>
-        row(`aws-pl-${p.name}`, cx => this.openPipeline(p.name, cx))
+      return [this.filterBox(), ...this.filtered("pipelines", this.pipelines, p => p.name).map(p => {
+        const on = this.pinned("pipelines").includes(p.name);
+        return row(`aws-pl-${p.name}`, cx => this.openPipeline(p.name, cx))
+          .child(
+            div()
+              .id(`aws-pin-${p.name}`)
+              .w(14)
+              .text_size(11)
+              .text_color(on ? t.accent : t.dim)
+              .hover(h => h.text_color(t.accent))
+              .on_click((_e, cx) => (cx.stop_propagation(), this.togglePin("pipelines", p.name, cx)))
+              .child(on ? "◆" : "◇"),
+          )
           .child(div().flex_1().child(p.name))
-          .child(div().text_color(t.dim).text_size(11.5).child(ago(time(p.updated)))),
-      )];
+          .child(div().text_color(t.dim).text_size(11.5).child(ago(time(p.updated))));
+      })];
     const region = regionOf(this.region);
     const url = `https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${encodeURIComponent(this.pipeline)}/view${region ? `?region=${region}` : ""}`;
     const out = [
@@ -602,9 +640,9 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
   }
 
   logsView(t, row, back) {
-    // Background-only hover, one shared closure: a color change on text would re-layout the
-    // row on every hover, and the list re-runs its rows every frame.
-    const hov = (this.hov?.t === t ? this.hov : (this.hov = { t, f: h => h.bg(t.hover) })).f;
+    // Background-only hover: a text color change would re-layout the row. Built per render:
+    // the host releases closures with the render that made them, so caching one breaks hover.
+    const hov = h => h.bg(t.hover);
     if (this.group && this.exporting) return this.exportView(t, row, back);
     if (this.group && this.showStreams)
       return [
@@ -695,17 +733,22 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
         ),
       ];
     }
+    const pins = this.pinned("groups");
     return [
       this.filterBox(),
+      div().px(10).pb(2).text_size(10.5).text_color(t.dim).child("right-click a group to pin it on top"),
       scroller(
         "aws-groups",
         this.filtered("groups", this.groups, g => g.logGroupName),
         g => g.logGroupName,
         g =>
           h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(hov)
+            .child(div().flex_none().w(14).text_size(11).text_color(pins.includes(g.logGroupName) ? t.accent : t.dim).child(pins.includes(g.logGroupName) ? "◆" : "◇"))
             .child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName))
             .child(div().flex_none().text_color(t.dim).text_size(11).child(g._size ??= g.storedBytes ? size(g.storedBytes) : "")),
         (k, cx) => this.openGroup(k, cx),
+        26,
+        (k, cx) => this.togglePin("groups", k, cx),
       ),
     ];
   }
