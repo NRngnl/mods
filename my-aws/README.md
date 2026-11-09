@@ -64,7 +64,7 @@ AWS bills these read calls, so the panel never calls AWS on its own:
 - The header shows how many AWS calls this panel made since it opened.
 - A log view load is one `filter-log-events` paging run (up to 2000 events). **Export** pages
   through every match, so a wide range on a busy group means many requests; narrow the range or
-  pattern first. CloudWatch Logs bills scanned data for filter queries, not only requests.
+  pattern first. Check current CloudWatch and CodePipeline API pricing for your region.
 
 ## Install
 
