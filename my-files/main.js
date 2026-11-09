@@ -1,7 +1,7 @@
 // Modified from Herdr's `files` mod (herdr-app, Apache-2.0): remote upload and download added.
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
+import { v_flex, h_flex, Editor, EditorState, Input, InputState } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window } from "herdr";
 import { upload, download, pickAndUpload } from "./transfer.js";
 
@@ -121,6 +121,7 @@ export default class Files extends View {
     }
     if (!cwd || this.loading) return;
     const context = this.context;
+    const base = context.cwd; // the pane's folder, or one you browsed to with .. / Open
     this.loading = true;
     this.limited = false;
     cx.spawn(async cx => {
@@ -129,7 +130,8 @@ export default class Files extends View {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);
         }
-        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
+        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd: base, on }).catch(() => null);
+        this.top = top?.code === 0 ? top.stdout.trim() : null;
         const marks = {};
         if (top?.code === 0) {
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
@@ -145,7 +147,7 @@ export default class Files extends View {
               "--no-renames",
               "--untracked-files=all",
             ],
-            { cwd, on },
+            { cwd: base, on },
           ).catch(() => null);
           if (status?.code === 0)
             for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, TOTAL)) {
@@ -157,13 +159,106 @@ export default class Files extends View {
         if (!this.current(context)) return;
         this.marks = marks;
         this.error = null;
-        this.watch(cwd, cx);
+        this.watch(base, cx);
       } catch (e) {
         if (this.current(context)) this.error = String(e);
       } finally {
         if (this.context === context) this.loading = false;
         cx.notify();
       }
+    });
+  }
+
+  // Browse another folder in place of the pane's (.., or Open on a folder). Context change resets it.
+  go(abs, cx) {
+    this.context = { ...this.context, cwd: abs };
+    this.root = abs;
+    this.entries = new Map();
+    this.folders = new Set();
+    this.marks = {};
+    this.menuFor = null;
+    this.show(null);
+    this.watched = null;
+    this.loading = false;
+    this.refresh(cx);
+    cx.notify();
+  }
+
+  parent() {
+    const up = this.root.replace(/\/+$/, "").replace(/\/[^/]*$/, "");
+    return up || "/";
+  }
+
+  // Right-click actions on one entry, shown as a bar under its row.
+  actions(path, entry, depth, t) {
+    const abs = `${this.root}/${path}`;
+    const rel = this.top && abs.startsWith(`${this.top}/`) ? abs.slice(this.top.length + 1) : path;
+    const act = (id, label, fn) =>
+      div()
+        .id(`fa-${id}-${path}`)
+        .px(6)
+        .h(20)
+        .flex()
+        .items_center()
+        .rounded(5)
+        .border_1()
+        .border_color(t.border)
+        .cursor_pointer()
+        .text_color(t.muted)
+        .hover(s => s.bg(t.hover).text_color(t.accent))
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          fn(cx);
+          this.menuFor = null;
+          cx.notify();
+        })
+        .child(label);
+    return h_flex()
+      .flex_none()
+      .flex_wrap()
+      .gap(4)
+      .pl(8 + depth * 18 + 19)
+      .pb(4)
+      .text_size(11)
+      .child(act("rename", "Rename", cx => this.startRename(path, entry.name, cx)))
+      .child(act("path", "Copy path", cx => cx.write_to_clipboard(abs)))
+      .child(act("rel", "Copy relative path", cx => cx.write_to_clipboard(rel)))
+      .when(entry.dir, el => el.child(act("open", "Open here", cx => this.go(abs, cx))));
+  }
+
+  startRename(path, name, cx) {
+    this.renameInput?.release();
+    const input = InputState.new({ value: name });
+    this.renaming = path;
+    this.renameInput = input;
+    input.on("submit", (_e, cx) => this.rename(path, input.value().trim(), cx));
+    input.on("blur", (_e, cx) => {
+      if (this.renaming === path) this.renaming = null;
+      cx.notify();
+    });
+    input.focus();
+  }
+
+  // mv -n: never replaces an existing file; runs on the folder's machine.
+  rename(path, name, cx) {
+    this.renaming = null;
+    const old = path.split("/").pop();
+    if (!name || name === old || name.includes("/")) return cx.notify();
+    const dir = `${this.root}/${path.slice(0, -old.length)}`;
+    const script =
+      'cd "$1" && [ ! -e "$3" ] && mv -n -- "$2" "$3" || { echo "a file named $3 already exists" >&2; exit 1; }';
+    const context = this.context;
+    cx.spawn(async cx => {
+      const r = await exec("sh", ["-c", script, "rename", dir, old, name], { on: this.on }).catch(e => ({
+        code: 1,
+        stderr: String(e),
+      }));
+      if (r.code !== 0) this.error = `Rename failed: ${r.stderr.trim()}`;
+      if (this.current(context)) {
+        this.entries.delete(path.slice(0, -old.length - 1));
+        this.refresh(cx);
+      }
+      cx.notify();
     });
   }
 
@@ -261,7 +356,12 @@ export default class Files extends View {
           .rounded(7)
           .cursor_pointer()
           .hover(s => s.bg(t.hover))
+          .when(this.menuFor === path, el => el.bg(t.selected))
           .on_click((_e, cx) => (entry.dir ? this.toggle(path, cx) : this.show(path, cx)))
+          .on_mouse_down("right", (_e, cx) => {
+            this.menuFor = this.menuFor === path ? null : path;
+            cx.notify();
+          })
           .when(Boolean(this.on), el =>
             el.on_drop((e, cx) => {
               cx.stop_propagation();
@@ -282,7 +382,20 @@ export default class Files extends View {
               .flex_none()
               .text_color(t.muted),
           )
-          .child(div().flex_1().min_w(0).truncate().child(entry.name))
+          .child(
+            this.renaming === path
+              ? div()
+                  .flex_1()
+                  .min_w(0)
+                  .h(22)
+                  .px(4)
+                  .rounded(4)
+                  .border_1()
+                  .border_color(t.accent)
+                  .on_click((_e, cx) => cx.stop_propagation())
+                  .child(Input.new(this.renameInput).h_full().text_size(12))
+              : div().flex_1().min_w(0).truncate().child(entry.name),
+          )
           .when(Boolean(this.on) && entry.dir, el =>
             el.child(
               div()
@@ -328,6 +441,7 @@ export default class Files extends View {
             ),
           ),
       );
+      if (this.menuFor === path) out.push(this.actions(path, entry, depth, t));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
     return out;
@@ -405,7 +519,20 @@ export default class Files extends View {
               .text_right()
               .text_size(12)
               .text_color(t.dim)
-              .child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""),
+              .child(this.file ?? this.root ?? ""),
+          )
+          .when(!this.file && this.root !== location().cwd, el =>
+            el.child(
+              div()
+                .id("files-home")
+                .px(4)
+                .cursor_pointer()
+                .text_color(t.muted)
+                .hover(s => s.text_color(t.accent))
+                .tooltip("Back to the focused pane's folder")
+                .on_click((_e, cx) => this.go(location().cwd, cx))
+                .child("⌂"),
+            ),
           )
           .when(Boolean(this.on) && !this.file, el =>
             el.child(
@@ -429,6 +556,25 @@ export default class Files extends View {
             .overflow_y_scrollbar()
             .p(6)
             .on_drop((e, cx) => this.upload(e.paths, "", cx))
+            .when(Boolean(this.root) && this.root !== "/", el =>
+              el.child(
+                h_flex()
+                  .id("files-up")
+                  .h(28)
+                  .flex_none()
+                  .pl(8)
+                  .gap(7)
+                  .items_center()
+                  .rounded(7)
+                  .cursor_pointer()
+                  .text_color(t.muted)
+                  .hover(s => s.bg(t.hover))
+                  .on_click((_e, cx) => this.go(this.parent(), cx))
+                  .child(div().w(12).flex_none())
+                  .child(svg("mods/my-files/folder.svg").size(14).flex_none())
+                  .child(".."),
+              ),
+            )
             .children(this.rows("", 0, [], t))
             .when(Boolean(this.error) || !this.entries.get("")?.length, el =>
               el.child(

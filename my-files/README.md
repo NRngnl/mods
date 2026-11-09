@@ -9,6 +9,9 @@ A file browser for the focused pane's folder, modified from Herdr's shipped `fil
   different pane or space shows its own folder.
 - Marks files with git changes, and refreshes when files change (and every 10 seconds).
 - Click a file for a read-only, syntax-colored preview. ← goes back.
+- **..** at the top goes up a folder; ⌂ in the header goes back to the focused pane's folder.
+- Right-click a row for **Rename** (never overwrites an existing name), **Copy path**,
+  **Copy relative path** (from the git root) and, on folders, **Open here**.
 - Limits: 500 entries per folder, 5,000 in total; previews up to 400 KB.
 
 On a space on another machine (`hc machine`), it also transfers files:

@@ -36,7 +36,9 @@ what my-prs already fetched, so it adds no GitHub requests; only PRs in my-prs' 
 
 ## Remove a worktree
 
-✕ on a worktree row opens Herdr's own **Remove worktree** dialog, the same as the right-click
+✕ on a worktree row first stops every agent and shell whose folder is inside the worktree
+(in any space, or parked; a second click is needed while one is working), then opens Herdr's
+own **Remove worktree** dialog, the same as the right-click
 menu. It warns about uncommitted or unpushed work, then closes the space with its agents and
 shells and removes the checkout. The branch stays.
 

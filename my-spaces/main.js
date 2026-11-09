@@ -21,6 +21,7 @@ import {
   watchFolder,
   window,
   layout,
+  terminals,
 } from "herdr";
 
 function find(node, id) {
@@ -779,9 +780,25 @@ export default class Spaces extends View {
       );
   }
 
-  // Herdr's own Remove worktree dialog: it warns about uncommitted or unpushed work, then closes
-  // the space (its agents and shells) and runs git worktree remove.
+  // Terminals (agents and shells) on this machine whose folder is inside the worktree, in any
+  // space or parked; the dialog's space.close only reaches the space's own panes.
+  inside(w) {
+    const root = JSON.parse(where(w, panes()))[1];
+    if (!root) return [];
+    const on = w.machine ?? null;
+    return terminals().filter(
+      x =>
+        x.state === "live" &&
+        (x.cwd === root || x.cwd?.startsWith(`${root}/`)) &&
+        (on ? x.address?.startsWith(`${on}/`) : !x.address?.includes("/")),
+    );
+  }
+
+  // Asks once, stops every agent and shell in the worktree, then opens Herdr's own Remove worktree
+  // dialog (which warns about uncommitted or unpushed work, closes the space and removes it).
   removeButton(w, t) {
+    const asking = this.removing === w.id;
+    const live = this.inside(w);
     return div()
       .id(`space-rm-${w.id}`)
       .size(18)
@@ -791,12 +808,26 @@ export default class Spaces extends View {
       .justify_center()
       .rounded(4)
       .text_size(11)
-      .text_color(t.dim)
+      .text_color(asking ? t.ansi1 : t.dim)
       .hover(s => s.bg(t.hover).text_color(t.ansi1))
+      .tooltip(
+        live.length ? `Stop ${live.length} terminal(s) in this worktree, then remove it` : "Remove this worktree",
+      )
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_mouse_up("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
+        // Running agents get a confirm click first: stopping one loses its unsaved turn.
+        if (live.some(x => x.status === "working") && !asking) {
+          this.removing = w.id;
+          cx.timer.after(4000, cx => {
+            if (this.removing === w.id) this.removing = null;
+            cx.notify();
+          });
+          return cx.notify();
+        }
+        this.removing = null;
+        for (const x of live) run("terminal.kill", { terminal: x.address });
         openOverlay({
           mod: "worktree",
           kind: "dialog",
@@ -805,7 +836,7 @@ export default class Spaces extends View {
           props: { space: w.id, action: "remove" },
         });
       })
-      .child("✕");
+      .child(asking ? "✕?" : "✕");
   }
 
   compact({ w, i }, t) {
