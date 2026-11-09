@@ -14,6 +14,13 @@ Each folder is one mod. Copy it to `~/.config/herdr-app/mods/<name>/` on the mac
 - [`my-files`](my-files/README.md): Herdr's file browser with upload and download for spaces on
   another machine.
 
+## Integrations
+
+- [`integrations/claude`](integrations/claude): Claude Code hooks that report its state to herdr-core
+  (OSC 7501), so hc and the Herdr app list Claude as an agent like Pi. Run
+  `sh integrations/claude/install.sh` on each machine; it keeps a backup of `~/.claude/settings.json`
+  and only replaces its own entries.
+
 ## Install
 
 On the machine that runs the Herdr app:

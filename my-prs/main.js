@@ -4,6 +4,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
 import { spaces, focused, exec, theme, window, shared, setShared } from "herdr";
 import { actions, findWorktree, openPicked } from "./actions.js";
+import { loadAgentsFor } from "./agents.js";
 import { diffView } from "./diff.js";
 import { localTime, ago } from "./time.js";
 import { loadComments, commentsMarkdown } from "./comments.js";
@@ -223,6 +224,8 @@ export default class Prs extends View {
     this.openOn = on; // its actions keep using this machine's gh after a space switch
     this.msg = this.confirm = null;
     this.wt = { url: pr.url, checking: true };
+    this.convs = null;
+    this.convsAll = false;
     this.comments = null;
     this.showComments = this.showChecks = false;
     this.checks = null;
@@ -238,7 +241,11 @@ export default class Prs extends View {
     });
     cx.spawn(async cx => {
       const found = await findWorktree(pr, on);
-      if (this.open?.url === pr.url) this.wt = { url: pr.url, ...found };
+      if (this.open?.url === pr.url) {
+        this.wt = { url: pr.url, ...found };
+        // The worktree path is known now: look for its conversations.
+        loadAgentsFor(this, pr, cx, true);
+      }
       cx.notify();
     });
   }

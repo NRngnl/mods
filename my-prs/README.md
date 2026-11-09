@@ -44,9 +44,11 @@ Click a row. The header has the repo, review state, exact local times, CI and li
 - **▾** beside the worktree button: pick an installed agent (like the app's + menu) to open the
   worktree with it, in a new space or as a new tab in its open space. Needs the `my-prs-agents` mod
   installed too; it is the popup.
-- **Agents on this branch**: a foldable list of the agents whose pane is on the PR's branch or in
-  its worktree, with Herdr's status marks (spinner, Needs you, done, idle). Click one to go to it.
-  Hidden when there are none.
+- **Agents**: a foldable section with the agents running on the PR's branch (Herdr's status marks;
+  click to go to one) and every Pi, Claude and Codex conversation that ran in the PR's worktree, or
+  in a checkout open on its branch, newest first. Click a conversation to reopen exactly that one
+  (`pi --session`, `claude --resume`, `codex resume`); one that is already open is marked **open**
+  and goes to its agent instead. Read from the agents' session files on the PR's machine.
 - Tabs: **Description**, **Diff** (files, hunks and inline review threads; ↑ Prev / ↓ Next jump
   between threads, across files), **Comments** (newest first) and **Actions** (every check on the
   latest commit, failed first, as colored ✗ ● ✓ ⤼; click one to open its log).
