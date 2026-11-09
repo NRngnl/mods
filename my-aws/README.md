@@ -52,6 +52,20 @@ then **Save all matching here**. If the file exists you get **Overwrite** or **C
 machine remembers its last folder, and the last machine is preselected. Another machine gets the
 file with `scp -3` over the herdr ssh targets; a notification shows the event count and path.
 
+## Cost
+
+AWS bills these read calls, so the panel never calls AWS on its own:
+
+- No timers, polling or auto-refresh. Every call comes from a click, Enter, or ↻; a hidden or
+  background panel makes no calls.
+- Switching focus between machines (follow focus) reuses the lists that machine, profile and
+  region last loaded; only the first visit fetches.
+- A click that repeats the call already running is dropped, so fast double clicks don't double bill.
+- The header shows how many AWS calls this panel made since it opened.
+- A log view load is one `filter-log-events` paging run (up to 2000 events). **Export** pages
+  through every match, so a wide range on a busy group means many requests; narrow the range or
+  pattern first. CloudWatch Logs bills scanned data for filter queries, not only requests.
+
 ## Install
 
 ```sh

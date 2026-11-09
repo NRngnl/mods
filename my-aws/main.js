@@ -113,17 +113,27 @@ export default class Aws extends View {
   }
 
   // Runs one aws call; drops the result if machine/profile/region changed meanwhile.
+  // No timers anywhere: every call comes from a click. A click repeating the call already in
+  // flight is dropped, and the header counts calls made this session.
   run(cx, args, done) {
     const key = [this.on, this.profile, regionOf(this.region)].join("|");
+    const sig = key + "|" + args.join(" ");
+    if (this.inflight === sig) return;
+    this.inflight = sig;
+    this.calls = (this.calls ?? 0) + 1;
     this.loading = true;
     this.error = null;
     cx.spawn(async cx => {
       try {
         const data = await aws(this.on, this.profile, regionOf(this.region), args);
-        if (key === [this.on, this.profile, regionOf(this.region)].join("|")) done(data);
+        if (key === [this.on, this.profile, regionOf(this.region)].join("|")) {
+          done(data);
+          (this.seen ??= new Map()).set(key, { pipelines: this.pipelines, groups: this.groups });
+        }
       } catch (e) {
         this.error = e.message;
       }
+      if (this.inflight === sig) this.inflight = null;
       this.loading = false;
       cx.notify();
     });
@@ -357,7 +367,11 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
       if (this.on !== on) return;
       this.profiles = r?.code === 0 ? r.stdout.split("\n").map(s => s.trim()).filter(Boolean) : [];
       if (!this.profiles.includes(this.profile)) this.profile = this.profiles.includes("default") ? "default" : (this.profiles[0] ?? null);
-      this.reload(cx);
+      // Following focus between machines must not call AWS each time: reuse what this
+      // machine/profile/region last loaded; only a first visit or ↻ fetches.
+      const seen = this.seen?.get([on, this.profile, regionOf(this.region)].join("|"));
+      if (seen) Object.assign(this, { pipelines: seen.pipelines, groups: seen.groups, pipeline: null, state: null, group: null, stream: null, events: null });
+      else this.reload(cx);
       cx.notify();
     });
   }
@@ -418,7 +432,7 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
               .gap(4)
               .flex_wrap()
               .items_center()
-              .child(div().text_color(t.dim).text_size(12).child(`${this.on ?? "local"} ·`))
+              .child(div().text_color(t.dim).text_size(12).child(`${this.on ?? "local"} · ${this.calls ?? 0} calls ·`))
               .children(this.profiles.map(p => chip(`aws-p-${p}`, p, p === this.profile, pick(p))))
               .when(!this.profiles.length, e => e.child(div().text_color(t.dim).text_size(12).child("no aws profiles"))),
           )
