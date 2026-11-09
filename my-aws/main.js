@@ -567,9 +567,10 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
 
   pipelineView(t, row, back) {
     if (!this.pipeline)
-      return [this.filterBox(), ...this.filtered("pipelines", this.pipelines, p => p.name).map(p => {
+      return [this.filterBox(), div().px(10).pb(2).text_size(10.5).text_color(t.dim).child("right-click a pipeline (or click ◇) to pin it on top"), ...this.filtered("pipelines", this.pipelines, p => p.name).map(p => {
         const on = this.pinned("pipelines").includes(p.name);
         return row(`aws-pl-${p.name}`, cx => this.openPipeline(p.name, cx))
+          .on_mouse_down("right", (_e, cx) => (cx.stop_propagation(), this.togglePin("pipelines", p.name, cx)))
           .child(
             div()
               .id(`aws-pin-${p.name}`)
