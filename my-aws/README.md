@@ -46,8 +46,10 @@ console's "Search log group". From there:
 - **Streams…** lists the 200 most recent streams; pick one to narrow the view to it, and
   **all streams** to go back.
 
-Times are in local time. The events are one read-only text view: drag (or Shift+click) to select
-any range and copy with Cmd/Ctrl+C.
+Each row shows local time and (in all-streams view) the stream in their own dim columns, then the
+message. Click a row to select it, click another to extend the selection to that range, then
+**Copy messages**: only the raw messages are copied, without time or stream. Click the only
+selected row again (or **Clear**) to deselect.
 
 ↻ re-runs the current query.
 

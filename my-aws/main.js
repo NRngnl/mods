@@ -1,7 +1,7 @@
 // AWS panel: CodePipeline state and CloudWatch Logs, read-only, through the `aws` CLI on the
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
 import { View, div, list, uniform_list } from "gpui-kit";
-import { v_flex, h_flex, Input, InputState, Scrollbar, Editor, EditorState } from "gpui-base";
+import { v_flex, h_flex, Input, InputState, Scrollbar } from "gpui-base";
 import { spaces, focused, exec, theme, settings, shared, setShared, machines, window, hc, home, notify, writeTextFile } from "herdr";
 
 function machine() {
@@ -47,6 +47,7 @@ const local = ms => {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 };
+const evKey = ev => ev.eventId ?? `${ev.timestamp}-${ev.logStreamName}-${ev.ingestionTime}`;
 const time = v => (v == null ? 0 : typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(v));
 
 // ssh target of a herdr machine, for scp of exported logs.
@@ -117,16 +118,25 @@ export default class Aws extends View {
     this.on = undefined;
   }
 
-  // The events as one read-only editor: drag to select any range, Cmd/Ctrl+C to copy.
-  setLogText() {
-    const multi = !this.stream;
-    const text = (this.events ?? []).map(ev => `${local(ev.timestamp)}  ${multi && ev.logStreamName ? `[${ev.logStreamName}]  ` : ""}${ev.message.trimEnd()}`).join("\n");
-    if (this.logText) return this.logText.set_value(text);
-    this.logText = EditorState.new({ readonly: true, value: text, soft_wrap: true, line_numbers: false, folding: false, font_family: settings().font_family, font_size: 11.5 });
+  // Row selection like cpv's yank: click a row to select it, click another to extend to a range,
+  // click the only selected row to clear. Copy takes the raw messages only, not time or stream.
+  pickRow(key, cx) {
+    const i = (this.events ?? []).findIndex(ev => evKey(ev) === key);
+    if (i < 0) return;
+    if (this.sel && this.sel[0] === this.sel[1] && this.sel[0] === i) this.sel = null;
+    else if (this.sel && this.sel[0] === this.sel[1]) this.sel = [Math.min(this.sel[0], i), Math.max(this.sel[0], i)];
+    else this.sel = [i, i];
+    cx.notify();
+  }
+
+  copyRows(cx) {
+    if (!this.sel) return;
+    cx.write_to_clipboard(this.events.slice(this.sel[0], this.sel[1] + 1).map(ev => ev.message.trimEnd()).join("\n"));
+    this.copied = this.sel[1] - this.sel[0] + 1;
+    cx.notify();
   }
 
   close() {
-    this.logText?.release();
     this.watchGen = (this.watchGen ?? 0) + 1;
     this.region.release();
     this.filter.release();
@@ -265,7 +275,7 @@ export default class Aws extends View {
       [...args, "--max-items", String(MAX_EVENTS)],
       d => {
         this.events = d.events ?? [];
-        this.setLogText();
+        this.sel = null;
         this.truncated = Boolean(d.NextToken ?? d.nextToken);
       },
     );
@@ -633,7 +643,37 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           .text_size(11.5)
           .text_color(t.dim)
           .child(this.events ? `${this.events.length} events, ${this.range === "abs" ? `${this.from.value().trim()} → ${this.to.value().trim() || "now"}` : `last ${this.range}`}${this.truncated ? ` (first ${MAX_EVENTS} only; narrow the range or pattern)` : ""}` : "loading…"),
-        this.events ? Editor.new(this.logText).flex_1().min_h(0) : div(),
+        h_flex()
+          .px(10)
+          .gap(6)
+          .items_center()
+          .text_size(11.5)
+          .text_color(t.dim)
+          .child(div().flex_1().child(this.sel ? `${this.sel[1] - this.sel[0] + 1} line(s) selected` : "click a row to select, another to extend"))
+          .when(this.sel, e => e.child(small("aws-copy", this.copied ? `Copied ${this.copied}` : "Copy messages", false, cx => this.copyRows(cx))))
+          .when(this.sel, e => e.child(small("aws-unsel", "Clear", false, cx => (this.sel = null, cx.notify())))),
+        scroller(
+          "aws-events",
+          this.events ?? [],
+          evKey,
+          ev => {
+            const i = this.events.indexOf(ev);
+            const on = this.sel && i >= this.sel[0] && i <= this.sel[1];
+            return h_flex()
+              .px(10)
+              .py(1)
+              .gap(10)
+              .items_start()
+              .font_family(settings().font_family ?? "JetBrains Mono")
+              .text_size(11.5)
+              .when(on, e => e.bg(t.selected))
+              .child(div().flex_none().text_color(t.dim).child(local(ev.timestamp).slice(5)))
+              .when(multi && ev.logStreamName, e => e.child(div().flex_none().w(140).text_color(t.dim).text_ellipsis().child(ev.logStreamName)))
+              .child(div().flex_1().min_w(0).child(ev.message.trimEnd()));
+          },
+          (k, cx) => (this.copied = 0, this.pickRow(k, cx)),
+          false,
+        ),
       ];
     }
     return [
