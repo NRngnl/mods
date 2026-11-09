@@ -98,6 +98,7 @@ export default class Aws extends View {
   }
 
   close() {
+    this.watchGen = (this.watchGen ?? 0) + 1;
     this.region.release();
     this.filter.release();
     this.pattern.release();
@@ -163,6 +164,27 @@ export default class Aws extends View {
     this.pipeline = name;
     this.state = null;
     this.run(cx, ["codepipeline", "get-pipeline-state", "--name", name], d => (this.state = d));
+    this.watch(name, cx);
+  }
+
+  // Watch mode, as in cpv: poll every 3 s while anything runs, for a 90 s grace after opening
+  // and a 60 s cooldown after the run ends; then sleep (no calls) until reopened or ↻.
+  watch(name, cx) {
+    const gen = (this.watchGen = (this.watchGen ?? 0) + 1);
+    let until = Date.now() + 90e3;
+    this.watching = true;
+    cx.spawn(async cx => {
+      while (true) {
+        await cx.sleep(3000);
+        if (gen !== this.watchGen || this.pipeline !== name || this.tab !== "pipelines") return;
+        const running = JSON.stringify(this.state?.stageStates ?? []).includes('"InProgress"');
+        if (running) until = Date.now() + 60e3;
+        else if (Date.now() > until) break;
+        this.run(cx, ["codepipeline", "get-pipeline-state", "--name", name], d => this.pipeline === name && (this.state = d));
+      }
+      if (gen === this.watchGen) this.watching = false;
+      cx.notify();
+    });
   }
 
   openGroup(name, cx) {
@@ -476,7 +498,8 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
     const url = `https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${encodeURIComponent(this.pipeline)}/view${region ? `?region=${region}` : ""}`;
     const out = [
       h_flex()
-        .child(back(this.pipeline, cx => (this.pipeline = this.state = null, cx.notify())).flex_1())
+        .child(back(this.pipeline, cx => (this.pipeline = this.state = null, this.watchGen++, cx.notify())).flex_1())
+        .child(div().text_size(11.5).text_color(this.watching ? t.ansi2 : t.dim).child(this.watching ? "● live" : "○ paused, ↻ to resume"))
         .child(row("aws-console", cx => cx.open_url(url)).text_color(t.dim).child("Console ↗")),
     ];
     for (const s of this.state?.stageStates ?? []) {

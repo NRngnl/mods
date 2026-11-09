@@ -23,7 +23,11 @@ For SSO profiles, run `aws sso login --profile <name>` on that machine first.
 ## Pipelines
 
 Lists pipelines; the filter box narrows the list as you type. Click one for its stages and actions with status, source revision, failure
-message, a Details link to the build or deploy, and a Console link. ↻ refreshes the open view.
+message, a Details link to the build or deploy, and a Console link.
+
+It updates live like `cpv`'s watch mode: every 3 s while a stage or action is running, for 90 s
+after opening, and 60 s after a run ends. Then it pauses with no calls ("○ paused"); ↻ or
+reopening resumes. Leaving the pipeline, the Logs tab or closing the panel stops it.
 
 ## Logs
 
@@ -56,8 +60,8 @@ file with `scp -3` over the herdr ssh targets; a notification shows the event co
 
 AWS bills these read calls, so the panel never calls AWS on its own:
 
-- No timers, polling or auto-refresh. Every call comes from a click, Enter, or ↻; a hidden or
-  background panel makes no calls.
+- The only timer is pipeline watch mode (above). It stops on its own when nothing runs, so an
+  idle or background panel makes no calls. Logs never auto-refresh.
 - Switching focus between machines (follow focus) reuses the lists that machine, profile and
   region last loaded; only the first visit fetches.
 - A click that repeats the call already running is dropped, so fast double clicks don't double bill.
@@ -77,7 +81,7 @@ Add `"mod": "my-aws"` to a panel in your layout, then restart the app.
 
 ## Limits
 
-- No automatic refresh or live tail; use ↻.
+- No live tail for logs; use ↻.
 - Log groups are capped at 1000, streams at 200, events at 2000 per query (a note says when
   more matched; narrow the range or pattern).
 - Export: a message with line breaks spans several lines in the file. A very large export
