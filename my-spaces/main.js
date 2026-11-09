@@ -600,6 +600,45 @@ export default class Spaces extends View {
     cx.notify();
   }
 
+  // The open PR for this space's branch, from my-prs (shared, no GitHub calls here). Needs the
+  // repo's owner/name, read once per checkout from its origin.
+  prOf(w, g) {
+    const branches = shared("my-prs.branches");
+    if (!branches || !g?.branch) return null;
+    const cwd = where(w, panes());
+    if (!(cwd in (this.origins ??= {}))) {
+      this.origins[cwd] = null;
+      exec("git", ["-C", JSON.parse(cwd)[1] ?? "", "remote", "get-url", "origin"], { on: w.machine ?? null })
+        .then(r => {
+          const m = r.code === 0 && r.stdout.trim().match(/github\.com[:/](.+?\/.+?)(?:\.git)?\/?$/);
+          if (m) this.origins[cwd] = m[1].toLowerCase();
+        })
+        .catch(() => {});
+    }
+    const repo = this.origins[cwd];
+    return repo ? (branches[`${w.machine ?? null}|${repo}|${g.branch}`] ?? null) : null;
+  }
+
+  prBadge(pr, t) {
+    const color = { SUCCESS: t.ansi2, FAILURE: t.ansi1, ERROR: t.ansi1, PENDING: t.ansi3, EXPECTED: t.ansi3 }[pr.ci];
+    return div()
+      .id(`space-pr-${pr.url}`)
+      .flex_none()
+      .px(4)
+      .rounded(4)
+      .text_size(11)
+      .text_color(color ?? t.dim)
+      .hover(s => s.bg(t.hover))
+      .tooltip(pr.url)
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_mouse_up("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        cx.open_url(pr.url);
+      })
+      .child(`#${pr.number}`);
+  }
+
   // A small control inside a row: its press must not select or drag the row.
   control(id, child, t, onClick) {
     return div()
@@ -724,6 +763,7 @@ export default class Spaces extends View {
             ),
           )
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
+          .when(Boolean(this.prOf(w, g)), el => el.child(this.prBadge(this.prOf(w, g), t)))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
           .when(Boolean(kids) && this.foldedTrees.has(w.id), el =>
             el.child(div().flex_none().text_size(11).text_color(t.dim).child(`+${kids}`)),

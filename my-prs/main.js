@@ -86,6 +86,18 @@ function toggle(id, key, label, t) {
     .child(`${on ? "☑" : "☐"} ${label}`);
 }
 
+// Publishes "machine|owner/repo|branch" -> PR summary for other mods (my-spaces shows the number).
+// Shared values re-render every mod, so it is written only when the map actually changes.
+function publish(on, lists) {
+  const all = { ...(shared("my-prs.branches") ?? {}) };
+  for (const k of Object.keys(all)) if (k.startsWith(`${on}|`)) delete all[k];
+  for (const p of Object.values(lists).flat()) {
+    const ci = p.commits.nodes[0]?.commit.statusCheckRollup?.state ?? null;
+    all[`${on}|${p.repository.nameWithOwner.toLowerCase()}|${p.headRefName}`] = { number: p.number, url: p.url, ci };
+  }
+  if (JSON.stringify(all) !== JSON.stringify(shared("my-prs.branches") ?? {})) setShared("my-prs.branches", all);
+}
+
 export default class Prs extends View {
   init(_props, cx) {
     this.lists = null;
@@ -128,6 +140,7 @@ export default class Prs extends View {
           // Switched away while loading: keep the result for when you come back.
           const saved = this.cache.get(on) ?? {};
           this.mark(notifyChanges(saved.lists, lists, on, shared("my-prs.notify") !== false));
+          publish(on, lists);
           this.cache.set(on, {
             ...saved,
             lists,
@@ -141,6 +154,7 @@ export default class Prs extends View {
         }
         this.mark(notifyChanges(this.lists, lists, on, shared("my-prs.notify") !== false));
         this.lists = lists;
+        publish(on, lists);
         this.rate = rate;
         this.failures = 0;
         this.next = nextAllowed(rate, 0);

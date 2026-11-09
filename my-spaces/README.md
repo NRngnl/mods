@@ -6,7 +6,7 @@ repo, ahead/behind, drag to reorder, right-click menu.
 
 ```
 ┃ ▾ ◆ A app                  ← a repo with worktrees is one tinted card
-┃      ⑂ feature-x  ↑1   ✕
+┃      ⑂ feature-x  #78  ↑1   ✕
 ┃      ⑂ fix-bug         ✕
 ┃ ▸ ◇ B backend  +3          ← folded: 3 worktrees hidden
   ◇ D docs                   ← spaces without worktrees stay plain
@@ -27,6 +27,12 @@ hidden ones. The worktree you're in stays visible even when its repo is folded.
 
 ◇ / ◆ on a space pins it. Pinned spaces (with their worktrees) move to the top of their
 machine's list, in their current order.
+
+## PR badge
+
+With [`my-prs`](../my-prs/README.md) installed, a space whose branch has an open PR shows `#N` after
+its name, colored by CI (green passed, red failed, yellow running). Click it to open the PR. It reads
+what my-prs already fetched, so it adds no GitHub requests; only PRs in my-prs' lists get one.
 
 ## Remove a worktree
 
