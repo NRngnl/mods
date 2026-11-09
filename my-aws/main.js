@@ -602,6 +602,9 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
   }
 
   logsView(t, row, back) {
+    // Background-only hover, one shared closure: a color change on text would re-layout the
+    // row on every hover, and the list re-runs its rows every frame.
+    const hov = (this.hov?.t === t ? this.hov : (this.hov = { t, f: h => h.bg(t.hover) })).f;
     if (this.group && this.exporting) return this.exportView(t, row, back);
     if (this.group && this.showStreams)
       return [
@@ -612,7 +615,7 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           this.filtered("streams", this.streams, s => s.logStreamName),
           s => s.logStreamName,
           s =>
-            h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(h => h.bg(t.hover).text_color(t.accent))
+            h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(hov)
               .child(div().flex_1().min_w(0).text_ellipsis().child(s.logStreamName))
               .child(div().text_color(t.dim).text_size(11.5).child(s.lastEventTimestamp ? ago(s.lastEventTimestamp) : "")),
           (k, cx) => this.openStream(k, cx),
@@ -699,10 +702,9 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
         this.filtered("groups", this.groups, g => g.logGroupName),
         g => g.logGroupName,
         g =>
-          h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(h => h.bg(t.hover).text_color(t.accent))
-            .child(div().flex_none().text_color(t.dim).text_size(11).child("▤"))
+          h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(hov)
             .child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName))
-            .when(g.storedBytes, e => e.child(div().flex_none().text_color(t.dim).text_size(11).child(size(g.storedBytes)))),
+            .child(div().flex_none().text_color(t.dim).text_size(11).child(g._size ??= g.storedBytes ? size(g.storedBytes) : "")),
         (k, cx) => this.openGroup(k, cx),
       ),
     ];
