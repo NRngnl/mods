@@ -1,4 +1,5 @@
-// Modified from Herdr's `spaces` mod (herdr-app, Apache-2.0): a remove button on worktree rows.
+// Modified from Herdr's `spaces` mod (herdr-app, Apache-2.0): a remove button on worktree rows,
+// folding a repo's worktrees, and pinning spaces to the top (like Arc).
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
 // grouped by machine when more than one is known. After a space's name, the repo
 // its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
@@ -51,6 +52,12 @@ const FALLBACK = 60000;
 
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
+// A space color name (or hex) as a 6-digit hex, so an alpha suffix can tint it.
+function markOf(color, t) {
+  const c = color.startsWith("#") ? color : (MARK[color] ?? t[color] ?? MARK.ansi6);
+  return c.length === 4 ? `#${[...c.slice(1)].map(x => x + x).join("")}` : c.slice(0, 7);
+}
+
 const MARK = {
   ansi6: "#22a99a",
   ansi3: "#e3814f",
@@ -89,6 +96,9 @@ export default class Spaces extends View {
     this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
     for (const state of Object.values(this.reconnecting)) state.busy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
+    // Space ids: repo spaces whose worktrees are folded away, and spaces pinned to the top.
+    this.foldedTrees = new Set(JSON.parse(localStorage.getItem("spaces.folded") ?? "[]"));
+    this.pinned = new Set(JSON.parse(localStorage.getItem("spaces.pinned") ?? "[]"));
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // `git status` walks the whole tree, on another machine a process there:
@@ -320,16 +330,21 @@ export default class Spaces extends View {
     const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null }));
     const mains = new Set(list.filter(r => r.g && !r.g.linked).map(r => r.g.repo));
     const nested = r => r.g?.linked && mains.has(r.g.repo);
-    const out = [];
+    const groups = [];
     const placed = new Set(); // repos whose worktrees are listed (under the first of its spaces)
     for (const r of list) {
       if (nested(r)) continue;
-      out.push({ ...r, tree: null });
+      const group = [{ ...r, tree: null }];
+      groups.push(group);
       if (!r.g || r.g.linked || placed.has(r.g.repo)) continue;
       placed.add(r.g.repo);
       const kids = list.filter(k => nested(k) && k.g.repo === r.g.repo);
-      kids.forEach((k, n) => out.push({ ...k, tree: n === kids.length - 1 ? "└─" : "├─" }));
+      group[0].kids = kids.length;
+      kids.forEach((k, n) => group.push({ ...k, tree: n === kids.length - 1 ? "└─" : "├─", parent: r.w.id }));
     }
+    // Pinned groups first, each keeping its own order; the moves below make it the real order.
+    const pin = g => this.pinned.has(g[0].w.id);
+    const out = [...groups.filter(pin), ...groups.filter(g => !pin(g))].flat();
     // Simulate the batch so later indexes include earlier moves. An attempted
     // write can lose a sync conflict: allow the echo to settle before retrying.
     const order = sp.map(w => w.id);
@@ -349,7 +364,15 @@ export default class Spaces extends View {
       }
       this.ordering.machines = [...moved];
     }
-    return out.filter(r => this.shown.has(r.w.id));
+    // A folded repo hides its worktrees, except the one you're in.
+    const shown = out.filter(
+      r => this.shown.has(r.w.id) && !(r.parent && this.foldedTrees.has(r.parent) && !r.w.active),
+    );
+    // Each group's last visible row closes the card (a folded group may show one active worktree).
+    shown.forEach((r, n) => {
+      if (r.parent && shown[n + 1]?.parent !== r.parent) r.last = true;
+    });
+    return shown;
   }
 
   // The rows, under a header per machine once one isn't this computer.
@@ -570,12 +593,47 @@ export default class Spaces extends View {
       .when(g.behind > 0, el => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, tree }, t) {
+  // Toggles a space id in a persisted set.
+  flip(set, key, id, cx) {
+    set.has(id) ? set.delete(id) : set.add(id);
+    localStorage.setItem(key, JSON.stringify([...set]));
+    cx.notify();
+  }
+
+  // A small control inside a row: its press must not select or drag the row.
+  control(id, child, t, onClick) {
+    return div()
+      .id(id)
+      .size(16)
+      .flex_none()
+      .flex()
+      .items_center()
+      .justify_center()
+      .rounded(4)
+      .text_size(10.5)
+      .hover(s => s.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_mouse_up("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        onClick(cx);
+      })
+      .child(child);
+  }
+
+  row({ w, i, g, tree, kids, parent, last }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
     const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
+    // A repo with worktrees is one tinted card in the repo's color (like Dia): the repo row is its
+    // top, the last visible worktree its bottom, with a bar down the left.
+    const owner = parent ?? (kids ? w.id : null);
+    const tint = owner ? markOf(colors[owner] ?? "ansi6", t) : null;
+    const open = owner && !(kids && this.foldedTrees.has(w.id));
+    const top = owner && !tree,
+      bottom = owner && (Boolean(last) || (!tree && !open));
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -583,8 +641,16 @@ export default class Spaces extends View {
       .h(rowHeight({ tree }))
       .flex_none()
       .justify_center()
-      .rounded(8)
-      .when(on, el => el.bg(t.selected))
+      .when(!owner, el => el.rounded(8))
+      .when(Boolean(owner), el =>
+        el
+          .bg(`${tint}1a`)
+          .border_l(3)
+          .border_color(tint)
+          .when(top, el => el.rounded_t(8).mt(4))
+          .when(bottom, el => el.rounded_b(8).mb(4)),
+      )
+      .when(on, el => el.bg(owner ? `${tint}40` : t.selected))
       .when(!on, el => el.hover(s => s.bg(t.hover)))
       .when(this.pressed === w.id && this.over !== w.id, el => el.opacity(0.5))
       .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, el =>
@@ -628,7 +694,19 @@ export default class Spaces extends View {
           .gap(9)
           .items_center()
           .when(Boolean(tree), el =>
-            el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)),
+            el.pl(47).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)),
+          )
+          .when(!tree, el =>
+            el.child(
+              kids
+                ? this.control(
+                    `space-fold-${w.id}`,
+                    svg(`mods/workspace-chrome/chevron-${this.foldedTrees.has(w.id) ? "right" : "down"}.svg`).size(11),
+                    t,
+                    cx => this.flip(this.foldedTrees, "spaces.folded", w.id, cx),
+                  ).text_color(t.dim)
+                : div().w(16).flex_none(),
+            ),
           )
           .when(!tree, el =>
             el.child(
@@ -647,6 +725,16 @@ export default class Spaces extends View {
           )
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .when(Boolean(kids) && this.foldedTrees.has(w.id), el =>
+            el.child(div().flex_none().text_size(11).text_color(t.dim).child(`+${kids}`)),
+          )
+          .when(!tree, el =>
+            el.child(
+              this.control(`space-pin-${w.id}`, this.pinned.has(w.id) ? "◆" : "◇", t, cx =>
+                this.flip(this.pinned, "spaces.pinned", w.id, cx),
+              ).text_color(this.pinned.has(w.id) ? t.accent : t.dim),
+            ),
+          )
           .when(Boolean(g?.linked), el => el.child(this.removeButton(w, t))),
       );
   }
