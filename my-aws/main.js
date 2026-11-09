@@ -2,7 +2,7 @@
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState } from "gpui-base";
-import { spaces, focused, exec, theme, settings, shared, setShared, machines, hc, home, notify, writeTextFile } from "herdr";
+import { spaces, focused, exec, theme, settings, shared, setShared, machines, window, hc, home, notify, writeTextFile } from "herdr";
 
 function machine() {
   const space = spaces().find(s => s.active),
@@ -167,19 +167,19 @@ export default class Aws extends View {
     this.watch(name, cx);
   }
 
-  // Watch mode, as in cpv: poll every 3 s while anything runs, for a 90 s grace after opening
-  // and a 60 s cooldown after the run ends; then sleep (no calls) until reopened or ↻.
+  // Live like the web console: poll get-pipeline-state while the pipeline is open (CodePipeline
+  // has no per-request charge). Every 3 s with the app focused, 30 s in the background, like a
+  // browser throttling a background tab. Stops when leaving the pipeline, the tab or the panel.
   watch(name, cx) {
     const gen = (this.watchGen = (this.watchGen ?? 0) + 1);
-    let until = Date.now() + 90e3;
     this.watching = true;
     cx.spawn(async cx => {
+      let last = Date.now();
       while (true) {
         await cx.sleep(3000);
-        if (gen !== this.watchGen || this.pipeline !== name || this.tab !== "pipelines") return;
-        const running = JSON.stringify(this.state?.stageStates ?? []).includes('"InProgress"');
-        if (running) until = Date.now() + 60e3;
-        else if (Date.now() > until) break;
+        if (gen !== this.watchGen || this.pipeline !== name || this.tab !== "pipelines") break;
+        if (!window().active && Date.now() - last < 30e3) continue;
+        last = Date.now();
         this.run(cx, ["codepipeline", "get-pipeline-state", "--name", name], d => this.pipeline === name && (this.state = d));
       }
       if (gen === this.watchGen) this.watching = false;
@@ -499,7 +499,7 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
     const out = [
       h_flex()
         .child(back(this.pipeline, cx => (this.pipeline = this.state = null, this.watchGen++, cx.notify())).flex_1())
-        .child(div().text_size(11.5).text_color(this.watching ? t.ansi2 : t.dim).child(this.watching ? "● live" : "○ paused, ↻ to resume"))
+        .child(div().text_size(11.5).text_color(this.watching ? t.ansi2 : t.dim).child(this.watching ? (window().active ? "● live" : "● live (30 s)") : "○ paused, ↻ to resume"))
         .child(row("aws-console", cx => cx.open_url(url)).text_color(t.dim).child("Console ↗")),
     ];
     for (const s of this.state?.stageStates ?? []) {
