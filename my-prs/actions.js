@@ -2,7 +2,7 @@
 // Everything runs on the PR list's machine, with that machine's gh and git.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { spaces, panes, exec, run } from "herdr";
+import { spaces, panes, exec, run, openOverlay, shared } from "herdr";
 import { toggleDiff } from "./diff.js";
 import { loadChecks, failedCount } from "./checks.js";
 
@@ -38,7 +38,9 @@ if [ -z "$wt" ]; then
   else git worktree add -q -b "$b" "$wt" "$head"; [ "$4" = true ] || git -C "$wt" branch -q -u "origin/$b"; fi
 fi
 if git -C "$wt" merge -q --ff-only "$head" >/dev/null 2>&1; then note="up to date"; else note="not updated (local changes or diverged)"; fi
-printf '%s\\n%s' "$wt" "$note"`;
+set -- $(git -C "$wt" rev-list --left-right --count "HEAD...$head")
+dirty=$(git -C "$wt" status --porcelain --untracked-files=no | wc -l | tr -d " ")
+printf '%s\\n%s\\n%s %s %s' "$wt" "$note" "$1" "$2" "$dirty"`;
 
 const repoOf = url => url.match(/github\.com[:/](.+?\/.+?)(?:\.git)?\/?$/)?.[1]?.toLowerCase();
 
@@ -78,27 +80,27 @@ async function worktree(pr, on, mode) {
 
 // The PR's worktree path on disk, or null. Local git only, no network.
 // The PR's worktree on disk with how it compares to the PR head, or null.
+const parseCounts = (path, counts) => {
+  const [ahead, behind, dirty] = counts.split(" ").map(Number);
+  return { path, ahead, behind, dirty };
+};
+
 export const findWorktree = (pr, on) =>
   worktree(pr, on, "find").then(
-    ({ out }) => {
-      if (!out) return null;
-      const [path, counts] = out.split("\n");
-      const [ahead, behind, dirty] = counts.split(" ").map(Number);
-      return { path, ahead, behind, dirty };
-    },
+    ({ out }) => (out ? parseCounts(...out.split("\n")) : null),
     () => null,
   );
 
 async function syncWorktree(view, pr, on) {
-  const { out } = await worktree(pr, on, "sync");
-  view.wt = { url: pr.url, ...(await findWorktree(pr, on)) };
-  return `Synced: ${out.split("\n")[1]}`;
+  const [path, note, counts] = (await worktree(pr, on, "sync")).out.split("\n");
+  view.wt = { url: pr.url, ...parseCounts(path, counts) };
+  return `Synced: ${note}`;
 }
 
-async function openWorktree(view, pr, on) {
-  const { out } = await worktree(pr, on, "open");
-  const [wt, note] = out.split("\n");
-  view.wt = { url: pr.url, ...(await findWorktree(pr, on)) };
+// `agent`: a knownAgents() entry to start there, or null for a shell.
+async function openWorktree(view, pr, on, agent = null) {
+  const [wt, note, counts] = (await worktree(pr, on, "open")).out.split("\n");
+  view.wt = { url: pr.url, ...parseCounts(wt, counts) };
   // A worktree is a space of its own, nested under its repo in the sidebar (as the app's worktree
   // mod does). Go to the space already there, else start one in the worktree.
   const inside = p => p === wt || p?.startsWith(`${wt}/`);
@@ -107,9 +109,11 @@ async function openWorktree(view, pr, on) {
       (s.machine ?? null) === on &&
       (inside(s.folder) || panes().some(p => s.tabs.some(t => t.id === p.tab) && inside(p.cwd))),
   );
-  if (open) run("space.select", { id: open.id });
-  else run("space.new", { folder: wt, machine: on ?? "" });
-  return `${open ? "Switched to the worktree space" : "Opened the worktree in a new space"}: ${wt.replace(/^.*\/\.herdr\/worktrees\//, "")} (${note})`;
+  if (open) {
+    run("space.select", { id: open.id });
+    if (agent) run("tab.new", { space: open.id, folder: wt, name: agent.name, argv: agent.run });
+  } else run("space.new", { folder: wt, machine: on ?? "", ...(agent ? { argv: agent.run } : {}) });
+  return `${open ? "Switched to the worktree space" : "Opened the worktree in a new space"}${agent ? ` with ${agent.name}` : ""}: ${wt.replace(/^.*\/\.herdr\/worktrees\//, "")} (${note})`;
 }
 
 const merge = async (pr, method, on) =>
@@ -167,6 +171,57 @@ function button(view, id, label, t, act, { confirm = false, enabled = true } = {
     .child(view.busy === label || !act ? `${label}…` : asking ? `Confirm ${label.toLowerCase()}?` : label);
 }
 
+// ▾ beside Create/Open worktree: the app's popup (mod my-prs-agents) lists installed agents like
+// the + menu; the pick comes back through shared state and openPicked runs it.
+function agentMenu(view, pr, t) {
+  return div()
+    .id("prs-agents")
+    .h(24)
+    .px(6)
+    .flex()
+    .items_center()
+    .rounded(6)
+    .border_1()
+    .border_color(t.border)
+    .text_size(12)
+    .text_color(t.muted)
+    .cursor_pointer()
+    .hover(s => s.bg(t.hover).text_color(t.accent))
+    .tooltip("Open the worktree with an agent")
+    .on_click(() => {
+      if (view.busy) return;
+      openOverlay({
+        mod: "my-prs-agents",
+        kind: "popup",
+        width: 220,
+        height: 300,
+        props: { url: pr.url, on: view.openOn },
+      });
+    })
+    .child("▾");
+}
+
+// Called from render: runs a pick made in the popup once, for the open PR.
+export function openPicked(view, cx) {
+  const pick = shared("my-prs.agentPick");
+  if (!pick || pick.at === view.pickAt) return;
+  view.pickAt = pick.at;
+  const pr = view.open;
+  if (!pr || pr.url !== pick.url || Date.now() - pick.at > 10000) return;
+  view.busy = "Create worktree";
+  const on = view.openOn;
+  cx.spawn(async cx => {
+    try {
+      view.msg = { ok: true, text: await openWorktree(view, pr, on, pick.agent) };
+    } catch (err) {
+      view.msg = { ok: false, text: String(err.message ?? err) };
+    } finally {
+      view.busy = null;
+      cx.notify();
+    }
+  });
+}
+
 // Open always (reopens a closed space); the ahead/behind status; Sync only when it can fast-forward.
 function worktreeButton(view, pr, t) {
   const w = view.wt?.url === pr.url && view.wt.path ? view.wt : null;
@@ -175,6 +230,7 @@ function worktreeButton(view, pr, t) {
   if (view.wt?.url === pr.url && view.wt.checking)
     return row.child(button(view, "worktree", "Checking worktree", t, null, { enabled: false }));
   row.child(button(view, "worktree", w ? "Open worktree" : "Create worktree", t, on => openWorktree(view, pr, on)));
+  row.child(agentMenu(view, pr, t));
   if (!w) return row;
   const parts = [];
   if (w.ahead) parts.push([`↑${w.ahead}`, t.ansi4]);

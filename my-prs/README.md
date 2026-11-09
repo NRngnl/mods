@@ -41,6 +41,9 @@ Click a row. The header has the repo, review state, exact local times, CI and li
   An existing worktree on the branch is reused. Next to it: ↑ unpushed, ↓ behind the PR, ● uncommitted
   files, or ✓ in sync. **Sync ↓N** fast-forwards when that is safe; diverged or dirty
   worktrees are left to you.
+- **▾** beside the worktree button: pick an installed agent (like the app's + menu) to open the
+  worktree with it, in a new space or as a new tab in its open space. Needs the `my-prs-agents` mod
+  installed too; it is the popup.
 - Tabs: **Description**, **Diff** (files, hunks and inline review threads; ↑ Prev / ↓ Next jump
   between threads, across files), **Comments** (newest first) and **Actions** (every check on the
   latest commit, failed first, as colored ✗ ● ✓ ⤼; click one to open its log).
@@ -77,8 +80,9 @@ PR keeps using the machine it came from.
 ## Install
 
 ```sh
-cp -R my-prs ~/.config/herdr-app/mods/
+cp -R my-prs my-prs-agents ~/.config/herdr-app/mods/
 herdr-app check ~/.config/herdr-app/mods/my-prs
+herdr-app check ~/.config/herdr-app/mods/my-prs-agents
 ```
 
 Then add `{ "mod": "my-prs" }` to a layout, for example as a tab next to Files (see the repo README).

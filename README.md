@@ -7,6 +7,8 @@ Each folder is one mod. Copy it to `~/.config/herdr-app/mods/<name>/` on the mac
 
 - [`my-prs`](my-prs/README.md): your PRs, review requests and reviewed PRs with CI, review state,
   diff, comments, merge, approve and worktrees, per machine and GitHub account.
+- `my-prs-agents`: the agent picker popup that `my-prs` opens. Install it with `my-prs`; it needs no
+  layout entry.
 - [`my-spaces`](my-spaces/README.md): Herdr's spaces sidebar with Arc/Dia-style groups: each repo and
   its worktrees as one colored card, fold, pin, and ✕ to remove a worktree.
 - [`my-files`](my-files/README.md): Herdr's file browser with upload and download for spaces on

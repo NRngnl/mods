@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
 import { spaces, focused, exec, theme, window, shared, setShared } from "herdr";
-import { actions, findWorktree } from "./actions.js";
+import { actions, findWorktree, openPicked } from "./actions.js";
 import { diffView } from "./diff.js";
 import { localTime, ago } from "./time.js";
 import { loadComments, commentsMarkdown } from "./comments.js";
@@ -445,6 +445,7 @@ export default class Prs extends View {
     // On unless turned off; the choice is persisted by the app.
     if (shared("my-prs.follow") !== false) this.follow(cx);
     else this.followKey = null;
+    openPicked(this, cx);
     const t = theme();
     const body = [];
     if (this.error) body.push(div().p(8).text_size(12).text_color(t.ansi1).child(this.error));
