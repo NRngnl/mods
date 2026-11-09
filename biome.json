@@ -4,6 +4,7 @@
     "includes": [
       "my-files/**/*.js",
       "my-prs/**/*.js",
+      "my-spaces/**/*.js",
       "my-files/jsconfig.json",
       "biome.json",
       "!**/gpui-kit.d.ts",

@@ -7,6 +7,8 @@ Each folder is one mod. Copy it to `~/.config/herdr-app/mods/<name>/` on the mac
 
 - [`my-prs`](my-prs/README.md): your PRs, review requests and reviewed PRs with CI, review state,
   diff, comments, merge, approve and worktrees, per machine and GitHub account.
+- [`my-spaces`](my-spaces/README.md): Herdr's spaces sidebar with a ✕ on worktree rows to close and
+  remove them.
 - [`my-files`](my-files/README.md): Herdr's file browser with upload and download for spaces on
   another machine.
 
@@ -30,7 +32,7 @@ each mod folder on start; they are git-ignored.
 
 ## License
 
-Apache-2.0 (see `LICENSE`), the same as Herdr. `my-files` is modified from Herdr's `files` mod, and
+Apache-2.0 (see `LICENSE`), the same as Herdr. `my-files` and `my-spaces` are modified from Herdr's `files` and `spaces` mods, and
 `my-prs/diff.js` copies its diff rows from Herdr's `changes` mod; both come from
 [herdr-app](https://github.com/herdrdev/herdr-app) under Apache-2.0, and those files say so at the top.
 
