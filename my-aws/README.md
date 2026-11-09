@@ -6,6 +6,12 @@ viewer. It never writes to AWS: no start, retry or approval.
 It runs the `aws` CLI (v2) on the focused machine, so credentials are whatever that CLI
 resolves there: shared profiles, SSO, environment variables.
 
+## Machine pin
+
+The first header row lists your machines. **follow focus** (default) uses the focused pane's
+machine; 📌 a machine to always run `aws` there, whatever is focused. Handy when only one
+machine has the AWS config. The pin is remembered.
+
 ## Profiles and region
 
 The header lists the profiles from `aws configure list-profiles` on that machine. Click one to
@@ -21,7 +27,18 @@ message, a Details link to the build or deploy, and a Console link. ↻ refreshe
 
 ## Logs
 
-Lists log groups, then the 50 most recent streams of a group, the last 300 events of a stream. The filter box narrows groups and streams by name. ↻ refreshes the open view.
+Lists log groups (the filter box narrows them as you type). Opening a group shows the events of
+**all its streams** together, oldest first, each with its stream name underneath, like the
+console's "Search log group". From there:
+
+- Time range: 5m, 15m, 1h (default), 3h, 12h, 1d, 1w.
+- Filter pattern (Enter to apply): CloudWatch's own syntax, run on the AWS side, so it searches
+  every event in the range, not only the loaded ones. `ERROR`, `"exact phrase"`, `-DEBUG`,
+  `{ $.level = "error" }`.
+- **Streams…** lists the 200 most recent streams; pick one to narrow the view to it, and
+  **all streams** to go back.
+
+↻ re-runs the current query.
 
 ## Install
 
@@ -35,5 +52,6 @@ Add `"mod": "my-aws"` to a panel in your layout, then restart the app.
 ## Limits
 
 - No automatic refresh or live tail; use ↻.
-- Log groups are capped at 1000, streams at 50, events at 300.
-- No Logs Insights queries, filter patterns or JSON templates (the `cpv` extras).
+- Log groups are capped at 1000, streams at 200, events at 2000 per query (a note says when
+  more matched; narrow the range or pattern).
+- No live tail, Logs Insights queries, custom absolute time ranges or JSON templates.

@@ -2,7 +2,7 @@
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState } from "gpui-base";
-import { spaces, focused, exec, theme, settings, shared, setShared } from "herdr";
+import { spaces, focused, exec, theme, settings, shared, setShared, machines } from "herdr";
 
 function machine() {
   const space = spaces().find(s => s.active),
@@ -25,6 +25,9 @@ const ago = ms => {
 // Only real region codes (ap-northeast-1) reach the CLI; anything else means the profile default.
 const isRegion = v => /^[a-z]{2}(-[a-z]+)+-\d$/.test(v ?? "");
 const regionOf = input => (isRegion(input.value().trim()) ? input.value().trim() : "");
+// Time-range presets for group/stream logs, like the console's relative ranges.
+const RANGES = [["5m", 3e5], ["15m", 9e5], ["1h", 36e5], ["3h", 108e5], ["12h", 432e5], ["1d", 864e5], ["1w", 6048e5]];
+const MAX_EVENTS = 2000;
 const time = v => (v == null ? 0 : typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(v));
 
 export default class Aws extends View {
@@ -37,16 +40,21 @@ export default class Aws extends View {
     this.region.on("submit", (_e, cx) => this.reload(cx));
     this.filter = InputState.new({ value: "", placeholder: "filter" });
     this.filter.on("change", (_e, cx) => cx.notify());
+    this.pin = saved.pin; // undefined = follow focus; null = local; string = that machine
+    this.range = saved.range ?? "1h";
+    this.pattern = InputState.new({ value: "", placeholder: "filter pattern (e.g. ERROR, \"exact\", { $.level = \"error\" })" });
+    this.pattern.on("submit", (_e, cx) => this.loadEvents(cx));
     this.on = undefined;
   }
 
   close() {
     this.region.release();
     this.filter.release();
+    this.pattern.release();
   }
 
   save() {
-    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region) });
+    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range });
   }
 
   // Runs one aws call; drops the result if machine/profile/region changed meanwhile.
@@ -95,20 +103,45 @@ export default class Aws extends View {
   openGroup(name, cx) {
     this.filter.set_value("");
     this.group = name;
-    this.streams = this.stream = this.events = null;
-    this.run(cx, ["logs", "describe-log-streams", "--log-group-name", name, "--order-by", "LastEventTime", "--descending", "--max-items", "50"], d => (this.streams = d.logStreams ?? []));
+    this.streams = this.stream = null;
+    this.showStreams = false;
+    this.loadEvents(cx);
+  }
+
+  openStreams(cx) {
+    this.filter.set_value("");
+    this.showStreams = true;
+    this.streams = null;
+    this.run(cx, ["logs", "describe-log-streams", "--log-group-name", this.group, "--order-by", "LastEventTime", "--descending", "--max-items", "200"], d => (this.streams = d.logStreams ?? []));
   }
 
   openStream(name, cx) {
-    this.filter.set_value("");
+    this.showStreams = false;
     this.stream = name;
+    this.loadEvents(cx);
+  }
+
+  // Every stream of the group (or the one picked stream) in the chosen range, through the
+  // server-side CloudWatch filter pattern. Oldest first, capped at MAX_EVENTS.
+  loadEvents(cx) {
+    const ms = RANGES.find(([k]) => k === this.range)?.[1] ?? 36e5;
+    const pattern = this.pattern.value().trim();
     this.events = null;
-    this.run(cx, ["logs", "get-log-events", "--log-group-name", this.group, "--log-stream-name", name, "--limit", "300", "--no-start-from-head"], d => (this.events = d.events ?? []));
+    this.truncated = false;
+    this.run(
+      cx,
+      ["logs", "filter-log-events", "--log-group-name", this.group, "--start-time", String(Date.now() - ms), "--max-items", String(MAX_EVENTS),
+        ...(this.stream ? ["--log-stream-names", this.stream] : []), ...(pattern ? ["--filter-pattern", pattern] : [])],
+      d => {
+        this.events = d.events ?? [];
+        this.truncated = Boolean(d.NextToken ?? d.nextToken);
+      },
+    );
   }
 
   // Machine change: refetch its profiles, keep the chosen one when that machine has it.
   sync(cx) {
-    const on = machine();
+    const on = this.pin === undefined ? machine() : this.pin;
     if (on === this.on) return;
     this.on = on;
     this.profiles = [];
@@ -138,6 +171,12 @@ export default class Aws extends View {
         .child(label);
     const row = (id, click) => h_flex().id(id).px(10).py(4).gap(8).items_center().rounded(6).hover(s => s.bg(t.selected)).on_click((_e, cx) => click(cx));
     const back = (label, click) => row("aws-back", click).text_color(t.dim).child(`← ${label}`);
+    const pinTo = name => cx => {
+      this.pin = name;
+      this.save();
+      this.sync(cx);
+      cx.notify();
+    };
     const pick = profile => cx => {
       this.profile = profile;
       this.reload(cx);
@@ -158,6 +197,15 @@ export default class Aws extends View {
           .gap(6)
           .border_b_1()
           .border_color(t.border)
+          .child(
+            h_flex()
+              .gap(4)
+              .flex_wrap()
+              .items_center()
+              .child(div().text_color(t.dim).text_size(12).child("machine"))
+              .child(chip("aws-m-follow", "follow focus", this.pin === undefined, pinTo(undefined)))
+              .children(machines().map(m => chip(`aws-m-${m.name ?? "local"}`, `📌 ${m.name ?? "local"}`, this.pin === m.name, pinTo(m.name)))),
+          )
           .child(
             h_flex()
               .gap(4)
@@ -192,8 +240,7 @@ export default class Aws extends View {
   // ↻ refreshes the deepest open view rather than resetting to the list.
   refresh(cx) {
     if (this.tab === "pipelines" && this.pipeline) return this.openPipeline(this.pipeline, cx);
-    if (this.tab === "logs" && this.stream) return this.openStream(this.stream, cx);
-    if (this.tab === "logs" && this.group) return this.openGroup(this.group, cx);
+    if (this.tab === "logs" && this.group) return this.showStreams ? this.openStreams(cx) : this.loadEvents(cx);
     this.reload(cx);
   }
 
@@ -260,26 +307,9 @@ export default class Aws extends View {
   }
 
   logsView(t, row, back) {
-    if (this.stream) {
-      const mono = settings().font_family ?? "JetBrains Mono";
+    if (this.group && this.showStreams)
       return [
-        back(this.stream, cx => (this.stream = this.events = null, cx.notify())),
-        ...(this.events ?? []).map((ev, i) =>
-          h_flex()
-            .id(`aws-ev-${i}`)
-            .px(10)
-            .gap(8)
-            .items_start()
-            .font_family(mono)
-            .text_size(11.5)
-            .child(div().flex_none().text_color(t.dim).child(new Date(ev.timestamp).toISOString().slice(5, 19).replace("T", " ")))
-            .child(div().flex_1().min_w(0).child(ev.message.trimEnd())),
-        ),
-      ];
-    }
-    if (this.group)
-      return [
-        back(this.group, cx => (this.group = this.streams = null, cx.notify())),
+        back("all streams", cx => (this.showStreams = false, cx.notify())),
         this.filterBox(),
         ...(this.streams ?? []).filter(s => this.match(s.logStreamName)).map(s =>
           row(`aws-ls-${s.logStreamName}`, cx => this.openStream(s.logStreamName, cx))
@@ -287,6 +317,50 @@ export default class Aws extends View {
             .child(div().text_color(t.dim).text_size(11.5).child(s.lastEventTimestamp ? ago(s.lastEventTimestamp) : "")),
         ),
       ];
+    if (this.group) {
+      const mono = settings().font_family ?? "JetBrains Mono";
+      const small = (id, label, active, click) =>
+        div().id(id).px(6).py(1).rounded(5).text_size(11.5).when(active, e => e.bg(t.selected)).hover(s => s.bg(t.selected)).on_click((_e, cx) => click(cx)).child(label);
+      const multi = !this.stream;
+      return [
+        h_flex()
+          .child(back(this.group, cx => (this.group = this.stream = this.events = null, cx.notify())).flex_1())
+          .child(small("aws-streams", "Streams…", false, cx => this.openStreams(cx))),
+        h_flex()
+          .px(6)
+          .gap(4)
+          .items_center()
+          .child(small("aws-s-all", "all streams", multi, cx => (this.stream = null, this.loadEvents(cx))))
+          .when(this.stream, e => e.child(div().flex_1().min_w(0).text_ellipsis().text_size(11.5).child(this.stream)))
+          .when(multi, e => e.child(div().flex_1())),
+        h_flex()
+          .px(6)
+          .gap(2)
+          .children(RANGES.map(([k]) => small(`aws-r-${k}`, k, this.range === k, cx => (this.range = k, this.save(), this.loadEvents(cx))))),
+        div().px(6).py(4).child(Input.new(this.pattern).h(24).text_size(12)),
+        div()
+          .px(10)
+          .text_size(11.5)
+          .text_color(t.dim)
+          .child(this.events ? `${this.events.length} events, last ${this.range}${this.truncated ? ` (first ${MAX_EVENTS} only; narrow the range or pattern)` : ""}` : "loading…"),
+        ...(this.events ?? []).map((ev, i) =>
+          v_flex()
+            .id(`aws-ev-${i}`)
+            .px(10)
+            .py(1)
+            .font_family(mono)
+            .text_size(11.5)
+            .child(
+              h_flex()
+                .gap(8)
+                .items_start()
+                .child(div().flex_none().text_color(t.dim).child(new Date(ev.timestamp).toISOString().slice(5, 19).replace("T", " ")))
+                .child(div().flex_1().min_w(0).child(ev.message.trimEnd())),
+            )
+            .when(multi && ev.logStreamName, e => e.child(div().pl(16).text_color(t.dim).text_size(10.5).text_ellipsis().child(ev.logStreamName))),
+        ),
+      ];
+    }
     return [
       this.filterBox(),
       ...(this.groups ?? []).filter(g => this.match(g.logGroupName)).map(g =>
