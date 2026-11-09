@@ -31,7 +31,11 @@ Lists log groups (the filter box narrows them as you type). Opening a group show
 **all its streams** together, oldest first, each with its stream name underneath, like the
 console's "Search log group". From there:
 
-- Time range: 5m, 15m, 1h (default), 3h, 12h, 1d, 1w.
+- Relative range: 5m, 15m, 1h (default), 3h, 12h, 1d, 1w, or type your own (`30m`, `6h`,
+  `2d`; s, m, h, d, w) and press Enter.
+- Absolute range: **from** and **to** as `YYYY-MM-DD HH:MM` (seconds optional, or a date alone
+  for midnight) in local time; empty **to** means now. Enter in either box applies it, and
+  **absolute** switches back to the last one.
 - Filter pattern (Enter to apply): CloudWatch's own syntax, run on the AWS side, so it searches
   every event in the range, not only the loaded ones. `ERROR`, `"exact phrase"`, `-DEBUG`,
   `{ $.level = "error" }`.
@@ -54,4 +58,4 @@ Add `"mod": "my-aws"` to a panel in your layout, then restart the app.
 - No automatic refresh or live tail; use ↻.
 - Log groups are capped at 1000, streams at 200, events at 2000 per query (a note says when
   more matched; narrow the range or pattern).
-- No live tail, Logs Insights queries, custom absolute time ranges or JSON templates.
+- No live tail, Logs Insights queries or JSON templates.

@@ -26,7 +26,20 @@ const ago = ms => {
 const isRegion = v => /^[a-z]{2}(-[a-z]+)+-\d$/.test(v ?? "");
 const regionOf = input => (isRegion(input.value().trim()) ? input.value().trim() : "");
 // Time-range presets for group/stream logs, like the console's relative ranges.
-const RANGES = [["5m", 3e5], ["15m", 9e5], ["1h", 36e5], ["3h", 108e5], ["12h", 432e5], ["1d", 864e5], ["1w", 6048e5]];
+const RANGES = ["5m", "15m", "1h", "3h", "12h", "1d", "1w"];
+const UNIT = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 };
+// "90m", "2h", "3d" → milliseconds; null when not a relative range.
+const relMs = v => {
+  const m = /^(\d+)\s*([smhdw])$/.exec((v ?? "").trim().toLowerCase());
+  return m && +m[1] > 0 ? +m[1] * UNIT[m[2]] : null;
+};
+// Local time "2025-01-31 14:00[:ss]" or a date alone (midnight); null when invalid.
+const absMs = v => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec((v ?? "").trim());
+  if (!m) return null;
+  const d = new Date(+m[1], m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0));
+  return d.getMonth() === m[2] - 1 && d.getDate() === +m[3] ? d.getTime() : null;
+};
 const MAX_EVENTS = 2000;
 const time = v => (v == null ? 0 : typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(v));
 
@@ -44,6 +57,22 @@ export default class Aws extends View {
     this.range = saved.range ?? "1h";
     this.pattern = InputState.new({ value: "", placeholder: "filter pattern (e.g. ERROR, \"exact\", { $.level = \"error\" })" });
     this.pattern.on("submit", (_e, cx) => this.loadEvents(cx));
+    this.rel = InputState.new({ value: RANGES.includes(this.range) || this.range === "abs" ? "" : this.range, placeholder: "custom: 30m, 6h, 2d" });
+    this.rel.on("submit", (_e, cx) => {
+      if (!relMs(this.rel.value())) return (this.error = "Relative range: a number and s, m, h, d or w, like 30m", cx.notify());
+      this.range = this.rel.value().trim().toLowerCase();
+      this.save();
+      this.loadEvents(cx);
+    });
+    this.from = InputState.new({ value: saved.from ?? "", placeholder: "from YYYY-MM-DD HH:MM" });
+    this.to = InputState.new({ value: saved.to ?? "", placeholder: "to (empty = now)" });
+    const abs = (_e, cx) => {
+      this.range = "abs";
+      this.save();
+      this.loadEvents(cx);
+    };
+    this.from.on("submit", abs);
+    this.to.on("submit", abs);
     this.on = undefined;
   }
 
@@ -51,10 +80,13 @@ export default class Aws extends View {
     this.region.release();
     this.filter.release();
     this.pattern.release();
+    this.rel.release();
+    this.from.release();
+    this.to.release();
   }
 
   save() {
-    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range });
+    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range, from: this.from.value().trim(), to: this.to.value().trim() });
   }
 
   // Runs one aws call; drops the result if machine/profile/region changed meanwhile.
@@ -124,13 +156,21 @@ export default class Aws extends View {
   // Every stream of the group (or the one picked stream) in the chosen range, through the
   // server-side CloudWatch filter pattern. Oldest first, capped at MAX_EVENTS.
   loadEvents(cx) {
-    const ms = RANGES.find(([k]) => k === this.range)?.[1] ?? 36e5;
+    let start, end;
+    if (this.range === "abs") {
+      start = absMs(this.from.value());
+      end = this.to.value().trim() ? absMs(this.to.value()) : Date.now();
+      if (start == null || end == null || start >= end) {
+        this.error = "Absolute range: from (and optional to) as YYYY-MM-DD HH:MM local time, from before to";
+        return;
+      }
+    } else start = Date.now() - (relMs(this.range) ?? 36e5);
     const pattern = this.pattern.value().trim();
     this.events = null;
     this.truncated = false;
     this.run(
       cx,
-      ["logs", "filter-log-events", "--log-group-name", this.group, "--start-time", String(Date.now() - ms), "--max-items", String(MAX_EVENTS),
+      ["logs", "filter-log-events", "--log-group-name", this.group, "--start-time", String(start), ...(end ? ["--end-time", String(end)] : []), "--max-items", String(MAX_EVENTS),
         ...(this.stream ? ["--log-stream-names", this.stream] : []), ...(pattern ? ["--filter-pattern", pattern] : [])],
       d => {
         this.events = d.events ?? [];
@@ -336,13 +376,23 @@ export default class Aws extends View {
         h_flex()
           .px(6)
           .gap(2)
-          .children(RANGES.map(([k]) => small(`aws-r-${k}`, k, this.range === k, cx => (this.range = k, this.save(), this.loadEvents(cx))))),
+          .items_center()
+          .children(RANGES.map(k => small(`aws-r-${k}`, k, this.range === k, cx => (this.range = k, this.save(), this.loadEvents(cx)))))
+          .child(div().w(90).child(Input.new(this.rel).h(22).text_size(11.5)))
+          .when(relMs(this.range) && !RANGES.includes(this.range), e => e.child(div().text_size(11.5).text_color(t.foreground).child(`● ${this.range}`))),
+        h_flex()
+          .px(6)
+          .gap(4)
+          .items_center()
+          .child(small("aws-r-abs", "absolute", this.range === "abs", cx => (this.range = "abs", this.save(), this.loadEvents(cx))))
+          .child(div().flex_1().child(Input.new(this.from).h(22).text_size(11.5)))
+          .child(div().flex_1().child(Input.new(this.to).h(22).text_size(11.5))),
         div().px(6).py(4).child(Input.new(this.pattern).h(24).text_size(12)),
         div()
           .px(10)
           .text_size(11.5)
           .text_color(t.dim)
-          .child(this.events ? `${this.events.length} events, last ${this.range}${this.truncated ? ` (first ${MAX_EVENTS} only; narrow the range or pattern)` : ""}` : "loading…"),
+          .child(this.events ? `${this.events.length} events, ${this.range === "abs" ? `${this.from.value().trim()} → ${this.to.value().trim() || "now"}` : `last ${this.range}`}${this.truncated ? ` (first ${MAX_EVENTS} only; narrow the range or pattern)` : ""}` : "loading…"),
         ...(this.events ?? []).map((ev, i) =>
           v_flex()
             .id(`aws-ev-${i}`)
