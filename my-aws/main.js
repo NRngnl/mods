@@ -47,6 +47,7 @@ const local = ms => {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 };
+const size = b => (b < 1e3 ? `${b} B` : b < 1e6 ? `${(b / 1e3).toFixed(0)} KB` : b < 1e9 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e9).toFixed(1)} GB`);
 const evKey = ev => ev.eventId ?? `${ev.timestamp}-${ev.logStreamName}-${ev.ingestionTime}`;
 const time = v => (v == null ? 0 : typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(v));
 
@@ -611,7 +612,7 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           this.filtered("streams", this.streams, s => s.logStreamName),
           s => s.logStreamName,
           s =>
-            h_flex().h(26).px(10).gap(8).items_center()
+            h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(h => h.bg(t.hover).text_color(t.accent))
               .child(div().flex_1().min_w(0).text_ellipsis().child(s.logStreamName))
               .child(div().text_color(t.dim).text_size(11.5).child(s.lastEventTimestamp ? ago(s.lastEventTimestamp) : "")),
           (k, cx) => this.openStream(k, cx),
@@ -697,7 +698,11 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
         "aws-groups",
         this.filtered("groups", this.groups, g => g.logGroupName),
         g => g.logGroupName,
-        g => h_flex().h(26).px(10).items_center().child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName)),
+        g =>
+          h_flex().h(26).mx(4).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover(h => h.bg(t.hover).text_color(t.accent))
+            .child(div().flex_none().text_color(t.dim).text_size(11).child("▤"))
+            .child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName))
+            .when(g.storedBytes, e => e.child(div().flex_none().text_color(t.dim).text_size(11).child(size(g.storedBytes)))),
         (k, cx) => this.openGroup(k, cx),
       ),
     ];
