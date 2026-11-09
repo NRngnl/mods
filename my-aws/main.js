@@ -1,7 +1,7 @@
 // AWS panel: CodePipeline state and CloudWatch Logs, read-only, through the `aws` CLI on the
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
-import { View, div } from "gpui-kit";
-import { v_flex, h_flex, Input, InputState } from "gpui-base";
+import { View, div, list, uniform_list } from "gpui-kit";
+import { v_flex, h_flex, Input, InputState, Scrollbar } from "gpui-base";
 import { spaces, focused, exec, theme, settings, shared, setShared, machines, window, hc, home, notify, writeTextFile } from "herdr";
 
 function machine() {
@@ -57,6 +57,20 @@ async function listDirs(on, dir) {
   if (r.code !== 0) throw new Error(r.stderr.trim() || `cannot open ${dir || "home"}`);
   const [path, ...dirs] = r.stdout.split("\n").filter(Boolean);
   return { path, dirs };
+}
+
+// A list that fills the remaining height and builds only the rows on screen; long log views
+// (thousands of rows) stay responsive. Rows can't carry handlers: clicks go through onClick(key).
+function scroller(id, items, key, render, onClick, uniform = true) {
+  const l = uniform
+    ? uniform_list(id, items.length, i => key(items[i]), (rg, cx) => items.slice(rg.start, rg.end).map(x => render(x, cx)))
+    : list(id, items.length, i => key(items[i]), (i, cx) => render(items[i], cx));
+  return v_flex()
+    .relative()
+    .flex_1()
+    .min_h(0)
+    .child(l.size_full().when(onClick, e => e.on_item_click((k, cx) => onClick(k, cx))))
+    .child(Scrollbar.vertical(id).viewport_from_layout().absolute().inset_0());
 }
 
 export default class Aws extends View {
@@ -475,7 +489,7 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           .flex_1()
           .min_h(0)
           .p(4)
-          .overflow_y_scrollbar()
+          .when(this.tab === "pipelines" || this.exporting, e => e.overflow_y_scrollbar())
           .children(this.tab === "pipelines" ? this.pipelineView(t, row, back) : this.logsView(t, row, back)),
       );
   }
@@ -556,10 +570,15 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
       return [
         back("all streams", cx => (this.showStreams = false, cx.notify())),
         this.filterBox(),
-        ...(this.streams ?? []).filter(s => this.match(s.logStreamName)).map(s =>
-          row(`aws-ls-${s.logStreamName}`, cx => this.openStream(s.logStreamName, cx))
-            .child(div().flex_1().min_w(0).text_ellipsis().child(s.logStreamName))
-            .child(div().text_color(t.dim).text_size(11.5).child(s.lastEventTimestamp ? ago(s.lastEventTimestamp) : "")),
+        scroller(
+          "aws-streams-list",
+          (this.streams ?? []).filter(s => this.match(s.logStreamName)),
+          s => s.logStreamName,
+          s =>
+            h_flex().px(10).py(4).gap(8).items_center().rounded(6).hover(h => h.bg(t.selected))
+              .child(div().flex_1().min_w(0).text_ellipsis().child(s.logStreamName))
+              .child(div().text_color(t.dim).text_size(11.5).child(s.lastEventTimestamp ? ago(s.lastEventTimestamp) : "")),
+          (k, cx) => this.openStream(k, cx),
         ),
       ];
     if (this.group) {
@@ -599,9 +618,8 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           .text_size(11.5)
           .text_color(t.dim)
           .child(this.events ? `${this.events.length} events, ${this.range === "abs" ? `${this.from.value().trim()} → ${this.to.value().trim() || "now"}` : `last ${this.range}`}${this.truncated ? ` (first ${MAX_EVENTS} only; narrow the range or pattern)` : ""}` : "loading…"),
-        ...(this.events ?? []).map((ev, i) =>
+        scroller("aws-events", this.events ?? [], ev => ev.eventId ?? `${ev.timestamp}-${ev.logStreamName}-${ev.ingestionTime}`, ev =>
           v_flex()
-            .id(`aws-ev-${i}`)
             .px(10)
             .py(1)
             .font_family(mono)
@@ -614,13 +632,17 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
                 .child(div().flex_1().min_w(0).child(ev.message.trimEnd())),
             )
             .when(multi && ev.logStreamName, e => e.child(div().pl(16).text_color(t.dim).text_size(10.5).text_ellipsis().child(ev.logStreamName))),
-        ),
+        null, false),
       ];
     }
     return [
       this.filterBox(),
-      ...(this.groups ?? []).filter(g => this.match(g.logGroupName)).map(g =>
-        row(`aws-lg-${g.logGroupName}`, cx => this.openGroup(g.logGroupName, cx)).child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName)),
+      scroller(
+        "aws-groups",
+        (this.groups ?? []).filter(g => this.match(g.logGroupName)),
+        g => g.logGroupName,
+        g => h_flex().px(10).py(4).items_center().rounded(6).hover(h => h.bg(t.selected)).child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName)),
+        (k, cx) => this.openGroup(k, cx),
       ),
     ];
   }
