@@ -659,17 +659,22 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           ev => {
             const i = this.events.indexOf(ev);
             const on = this.sel && i >= this.sel[0] && i <= this.sel[1];
-            return h_flex()
+            // Time and stream on their own dim line, so the message gets the panel's full width.
+            return v_flex()
               .px(10)
-              .py(1)
-              .gap(10)
-              .items_start()
+              .py(2)
               .font_family(settings().font_family ?? "JetBrains Mono")
               .text_size(11.5)
               .when(on, e => e.bg(t.selected))
-              .child(div().flex_none().text_color(t.dim).child(local(ev.timestamp).slice(5)))
-              .when(multi && ev.logStreamName, e => e.child(div().flex_none().w(140).text_color(t.dim).text_ellipsis().child(ev.logStreamName)))
-              .child(div().flex_1().min_w(0).child(ev.message.trimEnd()));
+              .child(
+                h_flex()
+                  .gap(10)
+                  .text_size(10.5)
+                  .text_color(t.dim)
+                  .child(div().flex_none().child(local(ev.timestamp).slice(5)))
+                  .when(multi && ev.logStreamName, e => e.child(div().flex_1().min_w(0).text_ellipsis().child(ev.logStreamName))),
+              )
+              .child(div().w_full().child(ev.message.trimEnd()));
           },
           (k, cx) => (this.copied = 0, this.pickRow(k, cx)),
           false,

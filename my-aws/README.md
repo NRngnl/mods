@@ -46,8 +46,8 @@ console's "Search log group". From there:
 - **Streams…** lists the 200 most recent streams; pick one to narrow the view to it, and
   **all streams** to go back.
 
-Each row shows local time and (in all-streams view) the stream in their own dim columns, then the
-message. Click a row to select it, click another to extend the selection to that range, then
+Each event shows local time and (in all-streams view) the stream on a dim line above its message,
+so the message uses the full panel width. Click a row to select it, click another to extend the selection to that range, then
 **Copy messages**: only the raw messages are copied, without time or stream. Click the only
 selected row again (or **Clear**) to deselect.
 
