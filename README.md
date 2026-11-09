@@ -5,6 +5,8 @@ Each folder is one mod. Copy it to `~/.config/herdr-app/mods/<name>/` on the mac
 
 ## Mods
 
+- [`my-aws`](my-aws/README.md): read-only CodePipeline state and CloudWatch Logs through the
+  `aws` CLI, with profile and region switching.
 - [`my-prs`](my-prs/README.md): your PRs, review requests and reviewed PRs with CI, review state,
   diff, comments, merge, approve and worktrees, per machine and GitHub account.
 - `my-prs-agents`: the agent picker popup that `my-prs` opens. Install it with `my-prs`; it needs no
