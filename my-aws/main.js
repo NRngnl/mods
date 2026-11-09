@@ -573,15 +573,16 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           .child(
             div()
               .id(`aws-pin-${p.name}`)
-              .w(14)
-              .text_size(11)
+              .flex_none()
+              .w(18)
+              .text_size(12)
               .text_color(on ? t.accent : t.dim)
               .hover(h => h.text_color(t.accent))
               .on_click((_e, cx) => (cx.stop_propagation(), this.togglePin("pipelines", p.name, cx)))
               .child(on ? "◆" : "◇"),
           )
-          .child(div().flex_1().child(p.name))
-          .child(div().text_color(t.dim).text_size(11.5).child(ago(time(p.updated))));
+          .child(div().flex_1().min_w(0).text_ellipsis().child(p.name))
+          .child(div().flex_none().text_color(t.dim).text_size(11.5).child(ago(time(p.updated))));
       })];
     const region = regionOf(this.region);
     const url = `https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${encodeURIComponent(this.pipeline)}/view${region ? `?region=${region}` : ""}`;
