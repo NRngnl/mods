@@ -2,7 +2,7 @@
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState } from "gpui-base";
-import { spaces, focused, exec, theme, settings, shared, setShared, machines } from "herdr";
+import { spaces, focused, exec, theme, settings, shared, setShared, machines, hc, home, notify, writeTextFile } from "herdr";
 
 function machine() {
   const space = spaces().find(s => s.active),
@@ -43,6 +43,22 @@ const absMs = v => {
 const MAX_EVENTS = 2000;
 const time = v => (v == null ? 0 : typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(v));
 
+// ssh target of a herdr machine, for scp of exported logs.
+async function sshTarget(name) {
+  const r = await hc(["machine", "ls", "--json"]);
+  const t = JSON.parse(r.stdout).machines.find(m => m.name === name)?.target;
+  if (!t) throw new Error(`No ssh target for ${name}`);
+  return t;
+}
+
+// Absolute path and subfolders of `dir` ("" = home) on machine `on`.
+async function listDirs(on, dir) {
+  const r = await exec("sh", ["-c", 'cd "${1:-$HOME}" && pwd && ls -1Ap | sed -n "s:/$::p"', "x", dir], { on });
+  if (r.code !== 0) throw new Error(r.stderr.trim() || `cannot open ${dir || "home"}`);
+  const [path, ...dirs] = r.stdout.split("\n").filter(Boolean);
+  return { path, dirs };
+}
+
 export default class Aws extends View {
   init(_props, cx) {
     const saved = shared("my-aws") ?? {};
@@ -73,6 +89,8 @@ export default class Aws extends View {
     };
     this.from.on("submit", abs);
     this.to.on("submit", abs);
+    this.exportDirs = saved.exportDirs ?? {}; // last folder per machine ("" key = local)
+    this.exportOn = saved.exportOn ?? null;
     this.on = undefined;
   }
 
@@ -86,7 +104,7 @@ export default class Aws extends View {
   }
 
   save() {
-    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range, from: this.from.value().trim(), to: this.to.value().trim() });
+    setShared("my-aws", { profile: this.profile, tab: this.tab, region: regionOf(this.region), pin: this.pin, range: this.range, from: this.from.value().trim(), to: this.to.value().trim(), exportDirs: this.exportDirs, exportOn: this.exportOn });
   }
 
   // Runs one aws call; drops the result if machine/profile/region changed meanwhile.
@@ -177,6 +195,80 @@ export default class Aws extends View {
         this.truncated = Boolean(d.NextToken ?? d.nextToken);
       },
     );
+  }
+
+  // Export: a folder browser on any machine, starting at the last folder saved there.
+  browse(on, dir, cx) {
+    this.exportOn = on;
+    this.exBusy = true;
+    cx.spawn(async cx => {
+      try {
+        const r = await listDirs(on, dir);
+        if (this.exportOn === on) Object.assign(this, { exPath: r.path, exDirs: r.dirs });
+      } catch (e) {
+        if (dir) return this.browse(on, "", cx); // remembered folder gone: fall back to home
+        this.error = e.message;
+      }
+      this.exBusy = false;
+      cx.notify();
+    });
+  }
+
+  openExport(cx) {
+    this.exporting = true;
+    this.browse(this.exportOn, this.exportDirs[this.exportOn ?? ""] ?? "", cx);
+  }
+
+  // Writes the loaded events as "time<TAB>stream<TAB>message" lines. Local: written in place;
+  // another machine: written to a temp file here, then scp'd and the temp removed.
+  saveExport(cx) {
+    const on = this.exportOn,
+      dir = this.exPath;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const file = `${this.group.replace(/[^\w.-]+/g, "_").replace(/^_+/, "")}${this.stream ? "_" + this.stream.replace(/[^\w.-]+/g, "_") : ""}_${stamp}.log`;
+    const text = (this.events ?? []).map(ev => `${new Date(ev.timestamp).toISOString()}\t${ev.logStreamName ?? this.stream ?? ""}\t${ev.message.trimEnd()}`).join("\n") + "\n";
+    this.exportDirs = { ...this.exportDirs, [on ?? ""]: dir };
+    this.exporting = false;
+    this.save();
+    cx.spawn(async cx => {
+      try {
+        if (on == null) await writeTextFile(`${dir}/${file}`, text, null);
+        else {
+          const tmp = `${home()}/.my-aws-${stamp}.log`;
+          await writeTextFile(tmp, text, null);
+          const r = await exec("scp", ["-o", "BatchMode=yes", tmp, `${await sshTarget(on)}:${dir}/${file}`]);
+          await exec("rm", ["-f", tmp]);
+          if (r.code !== 0) throw new Error(r.stderr.trim().slice(0, 300) || "scp failed");
+        }
+        notify({ title: "Log exported", body: `${on ?? "local"}:${dir}/${file}`, timeout: 5000 });
+      } catch (e) {
+        notify({ title: "Log export failed", body: String(e.message ?? e), level: "error" });
+      }
+      cx.notify();
+    });
+  }
+
+  exportView(t, row, back) {
+    const small = (id, label, active, click) =>
+      div().id(id).px(6).py(1).rounded(5).text_size(11.5).when(active, e => e.bg(t.selected)).hover(s => s.bg(t.selected)).on_click((_e, cx) => click(cx)).child(label);
+    const path = this.exPath ?? "";
+    return [
+      back("cancel export", cx => (this.exporting = false, cx.notify())),
+      h_flex()
+        .px(6)
+        .gap(4)
+        .flex_wrap()
+        .children(machines().map(m => small(`aws-xm-${m.name ?? "local"}`, m.name ?? "local", this.exportOn === m.name, cx => this.browse(m.name, this.exportDirs[m.name ?? ""] ?? "", cx)))),
+      h_flex()
+        .px(10)
+        .py(4)
+        .gap(8)
+        .items_center()
+        .child(div().flex_1().min_w(0).text_ellipsis_start().text_size(11.5).child(this.exBusy ? "…" : path))
+        .child(small("aws-x-save", `Save ${this.events?.length ?? 0} events here`, true, cx => this.exPath && this.saveExport(cx))),
+      path !== "/" && path ? row("aws-x-up", cx => this.browse(this.exportOn, path.replace(/\/[^/]*$/, "") || "/", cx)).text_color(t.dim).child("📁 ..") : div(),
+      ...(this.exDirs ?? []).map(d => row(`aws-x-d-${d}`, cx => this.browse(this.exportOn, `${path === "/" ? "" : path}/${d}`, cx)).child(`📁 ${d}`)),
+    ];
   }
 
   // Machine change: refetch its profiles, keep the chosen one when that machine has it.
@@ -347,6 +439,7 @@ export default class Aws extends View {
   }
 
   logsView(t, row, back) {
+    if (this.group && this.exporting) return this.exportView(t, row, back);
     if (this.group && this.showStreams)
       return [
         back("all streams", cx => (this.showStreams = false, cx.notify())),
@@ -365,6 +458,7 @@ export default class Aws extends View {
       return [
         h_flex()
           .child(back(this.group, cx => (this.group = this.stream = this.events = null, cx.notify())).flex_1())
+          .when(this.events?.length, e => e.child(small("aws-export", "Export…", false, cx => this.openExport(cx))))
           .child(small("aws-streams", "Streams…", false, cx => this.openStreams(cx))),
         h_flex()
           .px(6)
