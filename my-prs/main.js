@@ -9,6 +9,7 @@ import { diffView } from "./diff.js";
 import { localTime, ago } from "./time.js";
 import { loadComments, commentsMarkdown } from "./comments.js";
 import { checksView } from "./checks.js";
+import { commitsView } from "./commits.js";
 import { focusKey, prForFocus } from "./follow.js";
 import { notifyChanges } from "./notify.js";
 
@@ -227,7 +228,8 @@ export default class Prs extends View {
     this.convs = null;
     this.convsAll = false;
     this.comments = null;
-    this.showComments = this.showChecks = false;
+    this.showComments = this.showChecks = this.showCommits = false;
+    this.commits = null;
     this.checks = null;
     cx.spawn(async cx => {
       let c;
@@ -419,20 +421,22 @@ export default class Prs extends View {
       .child(
         this.diff?.url === pr.url && this.diff.show
           ? diffView(this.diff, t)
-          : this.showChecks
-            ? checksView(this.checks?.url === pr.url ? this.checks : null, t)
-            : TextView.markdown(
-                `prs-${this.showComments ? "comments" : "body"}-${pr.url}`,
-                this.showComments
-                  ? commentsMarkdown(this.comments?.url === pr.url ? this.comments : null)
-                  : pr.body?.trim() || "_No description._",
-              )
-                .selectable()
-                .scrollable()
-                .flex_1()
-                .min_h(0)
-                .p(12)
-                .on_link_click((url, cx) => cx.open_url(url)),
+          : this.showCommits
+            ? commitsView(this.commits?.url === pr.url ? this.commits : null, t)
+            : this.showChecks
+              ? checksView(this.checks?.url === pr.url ? this.checks : null, t)
+              : TextView.markdown(
+                  `prs-${this.showComments ? "comments" : "body"}-${pr.url}`,
+                  this.showComments
+                    ? commentsMarkdown(this.comments?.url === pr.url ? this.comments : null)
+                    : pr.body?.trim() || "_No description._",
+                )
+                  .selectable()
+                  .scrollable()
+                  .flex_1()
+                  .min_h(0)
+                  .p(12)
+                  .on_link_click((url, cx) => cx.open_url(url)),
       );
   }
 

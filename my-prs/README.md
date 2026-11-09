@@ -50,7 +50,8 @@ Click a row. The header has the repo, review state, exact local times, CI and li
   (`pi --session`, `claude --resume`, `codex resume`); one that is already open is marked **open**
   and goes to its agent instead. Read from the agents' session files on the PR's machine.
 - Tabs: **Description**, **Diff** (files, hunks and inline review threads; ↑ Prev / ↓ Next jump
-  between threads, across files), **Comments** (newest first) and **Actions** (every check on the
+  between threads, across files), **Comments** (newest first), **Commits** (the branch's commits as a graph, newest first,
+  merges drawn with the base joining, each with its CI; click to open on GitHub) and **Actions** (every check on the
   latest commit, failed first, as colored ✗ ● ✓ ⤼; click one to open its log).
 
 ## Header switches

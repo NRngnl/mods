@@ -6,6 +6,7 @@ import { spaces, panes, exec, run, openOverlay, shared } from "herdr";
 import { toggleDiff } from "./diff.js";
 import { agentsSection } from "./agents.js";
 import { loadChecks, failedCount } from "./checks.js";
+import { loadCommits } from "./commits.js";
 
 const METHODS = [
   ["squashMergeAllowed", "squash", "Squash"],
@@ -262,7 +263,15 @@ function checksLabel(view, pr) {
 function tabs(view, pr, t) {
   const diffOn = view.diff?.url === pr.url && view.diff.show;
   const c = view.comments?.url === pr.url ? view.comments : null;
-  const current = diffOn ? "diff" : view.showChecks ? "checks" : view.showComments ? "comments" : "desc";
+  const current = diffOn
+    ? "diff"
+    : view.showCommits
+      ? "commits"
+      : view.showChecks
+        ? "checks"
+        : view.showComments
+          ? "comments"
+          : "desc";
   const tab = (id, label, onClick) =>
     div()
       .id(`prs-tab-${id}`)
@@ -285,13 +294,13 @@ function tabs(view, pr, t) {
     .text_size(12)
     .child(
       tab("desc", "Description", () => {
-        view.showComments = view.showChecks = false;
+        view.showComments = view.showChecks = view.showCommits = false;
         if (view.diff) view.diff.show = false;
       }),
     )
     .child(
       tab("diff", view.diff?.url === pr.url && view.diff.loading ? "Diff…" : "Diff", cx => {
-        view.showComments = view.showChecks = false;
+        view.showComments = view.showChecks = view.showCommits = false;
         if (view.diff?.url === pr.url) view.diff.show = true;
         else {
           const on = view.openOn;
@@ -309,14 +318,36 @@ function tabs(view, pr, t) {
     .child(
       tab("comments", `Comments${c?.timeline ? ` ${c.timeline.length}` : ""}`, () => {
         view.showComments = true;
-        view.showChecks = false;
+        view.showChecks = view.showCommits = false;
         if (view.diff) view.diff.show = false;
       }),
     )
     .child(
+      tab(
+        "commits",
+        `Commits${view.commits?.url === pr.url && view.commits.total ? ` ${view.commits.total}` : ""}`,
+        cx => {
+          view.showCommits = true;
+          view.showComments = view.showChecks = false;
+          if (view.diff) view.diff.show = false;
+          const on = view.openOn;
+          cx.spawn(async cx => {
+            let c;
+            try {
+              c = await loadCommits(pr, on);
+            } catch (err) {
+              c = { error: String(err.message ?? err) };
+            }
+            if (view.open?.url === pr.url) view.commits = { url: pr.url, ...c };
+            cx.notify();
+          });
+        },
+      ),
+    )
+    .child(
       tab("checks", checksLabel(view, pr), cx => {
         view.showChecks = true;
-        view.showComments = false;
+        view.showComments = view.showCommits = false;
         if (view.diff) view.diff.show = false;
         // Fetched each time the tab is opened, so a running job's result shows on the next visit.
         const on = view.openOn;
