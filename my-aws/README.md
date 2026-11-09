@@ -44,11 +44,13 @@ console's "Search log group". From there:
 
 ↻ re-runs the current query.
 
-**Export…** saves the loaded events (one `time<TAB>stream<TAB>message` line each) as a `.log`
-file named after the group, stream and time. Pick any of your machines, browse folders like
-my-files (📁 .. goes up), then **Save here**. Each machine remembers its last folder, and the
-last machine is preselected. Other machines get the file over `scp` with their herdr ssh
-target; a notification says where it went.
+**Export…** saves **every event matching the current range, pattern and stream**, not just the
+loaded 2000: the `aws` CLI pages through all results on the AWS machine. Each line is
+`time<TAB>stream<TAB>message` (UTC). Pick any of your machines, browse folders like my-files
+(📁 .. goes up), type a name and **New folder** to create one, edit the file name if you like,
+then **Save all matching here**. If the file exists you get **Overwrite** or **Cancel**. Each
+machine remembers its last folder, and the last machine is preselected. Another machine gets the
+file with `scp -3` over the herdr ssh targets; a notification shows the event count and path.
 
 ## Install
 
@@ -64,5 +66,6 @@ Add `"mod": "my-aws"` to a panel in your layout, then restart the app.
 - No automatic refresh or live tail; use ↻.
 - Log groups are capped at 1000, streams at 200, events at 2000 per query (a note says when
   more matched; narrow the range or pattern).
-- Export saves what is loaded (up to 2000 events), not every match beyond that.
+- Export: a message with line breaks spans several lines in the file. A very large export
+  runs in the background with no progress bar; the notification comes at the end.
 - No live tail, Logs Insights queries or JSON templates.

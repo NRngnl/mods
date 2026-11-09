@@ -91,6 +91,9 @@ export default class Aws extends View {
     this.to.on("submit", abs);
     this.exportDirs = saved.exportDirs ?? {}; // last folder per machine ("" key = local)
     this.exportOn = saved.exportOn ?? null;
+    this.exName = InputState.new({ placeholder: "file name" });
+    this.newDir = InputState.new({ placeholder: "new folder name" });
+    this.newDir.on("submit", (_e, cx) => this.makeDir(cx));
     this.on = undefined;
   }
 
@@ -101,6 +104,8 @@ export default class Aws extends View {
     this.rel.release();
     this.from.release();
     this.to.release();
+    this.exName.release();
+    this.newDir.release();
   }
 
   save() {
@@ -173,23 +178,30 @@ export default class Aws extends View {
 
   // Every stream of the group (or the one picked stream) in the chosen range, through the
   // server-side CloudWatch filter pattern. Oldest first, capped at MAX_EVENTS.
-  loadEvents(cx) {
+  // filter-log-events args for the current group/stream/range/pattern; null (with this.error) when invalid.
+  queryArgs() {
     let start, end;
     if (this.range === "abs") {
       start = absMs(this.from.value());
       end = this.to.value().trim() ? absMs(this.to.value()) : Date.now();
       if (start == null || end == null || start >= end) {
         this.error = "Absolute range: from (and optional to) as YYYY-MM-DD HH:MM local time, from before to";
-        return;
+        return null;
       }
     } else start = Date.now() - (relMs(this.range) ?? 36e5);
     const pattern = this.pattern.value().trim();
+    return ["logs", "filter-log-events", "--log-group-name", this.group, "--start-time", String(start), ...(end ? ["--end-time", String(end)] : []),
+      ...(this.stream ? ["--log-stream-names", this.stream] : []), ...(pattern ? ["--filter-pattern", pattern] : [])];
+  }
+
+  loadEvents(cx) {
+    const args = this.queryArgs();
+    if (!args) return;
     this.events = null;
     this.truncated = false;
     this.run(
       cx,
-      ["logs", "filter-log-events", "--log-group-name", this.group, "--start-time", String(start), ...(end ? ["--end-time", String(end)] : []), "--max-items", String(MAX_EVENTS),
-        ...(this.stream ? ["--log-stream-names", this.stream] : []), ...(pattern ? ["--filter-pattern", pattern] : [])],
+      [...args, "--max-items", String(MAX_EVENTS)],
       d => {
         this.events = d.events ?? [];
         this.truncated = Boolean(d.NextToken ?? d.nextToken);
@@ -215,36 +227,78 @@ export default class Aws extends View {
   }
 
   openExport(cx) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    this.exName.set_value(`${this.group.replace(/[^\w.-]+/g, "_").replace(/^_+/, "")}${this.stream ? "_" + this.stream.replace(/[^\w.-]+/g, "_") : ""}_${stamp}.log`);
     this.exporting = true;
+    this.confirm = null;
     this.browse(this.exportOn, this.exportDirs[this.exportOn ?? ""] ?? "", cx);
   }
 
-  // Writes the loaded events as "time<TAB>stream<TAB>message" lines. Local: written in place;
-  // another machine: written to a temp file here, then scp'd and the temp removed.
-  saveExport(cx) {
+  makeDir(cx) {
+    const name = this.newDir.value().trim();
+    if (!name || name.includes("/") || name === "." || name === "..") return;
     const on = this.exportOn,
-      dir = this.exPath;
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const file = `${this.group.replace(/[^\w.-]+/g, "_").replace(/^_+/, "")}${this.stream ? "_" + this.stream.replace(/[^\w.-]+/g, "_") : ""}_${stamp}.log`;
-    const text = (this.events ?? []).map(ev => `${new Date(ev.timestamp).toISOString()}\t${ev.logStreamName ?? this.stream ?? ""}\t${ev.message.trimEnd()}`).join("\n") + "\n";
-    this.exportDirs = { ...this.exportDirs, [on ?? ""]: dir };
-    this.exporting = false;
-    this.save();
+      path = `${this.exPath === "/" ? "" : this.exPath}/${name}`;
     cx.spawn(async cx => {
+      const r = await exec("mkdir", [path], { on });
+      if (r.code !== 0) this.error = r.stderr.trim() || "mkdir failed";
+      else {
+        this.newDir.set_value("");
+        this.browse(on, path, cx);
+      }
+      cx.notify();
+    });
+  }
+
+  // Asks before replacing an existing file; `force` is the Overwrite answer.
+  saveExport(cx, force = false) {
+    const name = this.exName.value().trim();
+    if (!name || name.includes("/")) return (this.error = "File name must not be empty or contain /", cx.notify());
+    const on = this.exportOn,
+      dest = `${this.exPath === "/" ? "" : this.exPath}/${name}`;
+    cx.spawn(async cx => {
+      if (!force && (await exec("test", ["-e", dest], { on })).code === 0) {
+        this.confirm = dest;
+        return cx.notify();
+      }
+      this.confirm = null;
+      this.exportDirs = { ...this.exportDirs, [on ?? ""]: this.exPath };
+      this.exporting = false;
+      this.save();
+      cx.notify();
+      this.exportAll(on, dest, cx);
+    });
+  }
+
+  // Every matching event, not just the loaded ones: the CLI pages through all results on the AWS
+  // machine into a temp file ("time<TAB>stream<TAB>message" lines), then it moves or scp's it.
+  exportAll(on, dest, cx) {
+    const args = this.queryArgs();
+    if (!args) return;
+    const src = this.on,
+      region = regionOf(this.region);
+    const tmp = `.my-aws-export-${Date.now()}.log`;
+    const opts = [...(this.profile ? ["--profile", this.profile] : []), ...(region ? ["--region", region] : [])];
+    notify({ title: "Exporting log", body: `${this.group} → ${on ?? "local"}:${dest}`, timeout: 4000 });
+    cx.spawn(async () => {
       try {
-        if (on == null) await writeTextFile(`${dir}/${file}`, text, null);
-        else {
-          const tmp = `${home()}/.my-aws-${stamp}.log`;
-          await writeTextFile(tmp, text, null);
-          const r = await exec("scp", ["-o", "BatchMode=yes", tmp, `${await sshTarget(on)}:${dir}/${file}`]);
-          await exec("rm", ["-f", tmp]);
+        const q = await exec("sh", ["-c", `cd "$HOME" && t=$1 && shift && aws "$@" > "$t.raw" || { s=$?; rm -f "$t.raw"; exit $s; }
+if command -v perl >/dev/null; then perl -MPOSIX -pe 's/^(\\d+)(\\d{3})\t/strftime("%Y-%m-%dT%H:%M:%S",gmtime($1)).".$2Z\t"/e' "$t.raw" > "$t"; else mv "$t.raw" "$t"; fi
+rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "--query", "events[].[timestamp,logStreamName,message]"], { on: src });
+        if (q.code !== 0) throw new Error(q.stderr.trim().slice(0, 300) || "aws failed");
+        if (src === on) {
+          const r = await exec("sh", ["-c", 'mv -f "$HOME/$1" "$2"', "x", tmp, dest], { on });
+          if (r.code !== 0) throw new Error(r.stderr.trim() || "move failed");
+        } else {
+          const at = async (m, p) => (m == null ? (p.startsWith("/") ? p : `${home()}/${p}`) : `${await sshTarget(m)}:${p}`);
+          const r = await exec("scp", ["-3", "-o", "BatchMode=yes", await at(src, tmp), await at(on, dest)]);
+          await exec("sh", ["-c", 'rm -f "$HOME/$1"', "x", tmp], { on: src });
           if (r.code !== 0) throw new Error(r.stderr.trim().slice(0, 300) || "scp failed");
         }
-        notify({ title: "Log exported", body: `${on ?? "local"}:${dir}/${file}`, timeout: 5000 });
+        notify({ title: "Log exported", body: `${q.stdout.trim()} events → ${on ?? "local"}:${dest}`, timeout: 6000 });
       } catch (e) {
         notify({ title: "Log export failed", body: String(e.message ?? e), level: "error" });
       }
-      cx.notify();
     });
   }
 
@@ -253,7 +307,7 @@ export default class Aws extends View {
       div().id(id).px(6).py(1).rounded(5).text_size(11.5).when(active, e => e.bg(t.selected)).hover(s => s.bg(t.selected)).on_click((_e, cx) => click(cx)).child(label);
     const path = this.exPath ?? "";
     return [
-      back("cancel export", cx => (this.exporting = false, cx.notify())),
+      back("cancel export", cx => (this.exporting = this.confirm = false, cx.notify())),
       h_flex()
         .px(6)
         .gap(4)
@@ -264,8 +318,29 @@ export default class Aws extends View {
         .py(4)
         .gap(8)
         .items_center()
-        .child(div().flex_1().min_w(0).text_ellipsis_start().text_size(11.5).child(this.exBusy ? "…" : path))
-        .child(small("aws-x-save", `Save ${this.events?.length ?? 0} events here`, true, cx => this.exPath && this.saveExport(cx))),
+        .child(div().flex_1().min_w(0).text_ellipsis_start().text_size(11.5).child(this.exBusy ? "…" : path)),
+      h_flex()
+        .px(6)
+        .gap(4)
+        .items_center()
+        .child(div().flex_1().child(Input.new(this.exName).h(22).text_size(11.5)))
+        .child(small("aws-x-save", "Save all matching here", true, cx => this.exPath && this.saveExport(cx))),
+      this.confirm
+        ? h_flex()
+            .px(10)
+            .py(4)
+            .gap(6)
+            .items_center()
+            .child(div().flex_1().min_w(0).text_color(t.ansi3).text_size(11.5).child(`${this.confirm.split("/").pop()} already exists.`))
+            .child(small("aws-x-over", "Overwrite", false, cx => this.saveExport(cx, true)))
+            .child(small("aws-x-cancel", "Cancel", false, cx => (this.confirm = null, cx.notify())))
+        : div(),
+      h_flex()
+        .px(6)
+        .gap(4)
+        .items_center()
+        .child(div().flex_1().child(Input.new(this.newDir).h(22).text_size(11.5)))
+        .child(small("aws-x-mkdir", "New folder", false, cx => this.makeDir(cx))),
       path !== "/" && path ? row("aws-x-up", cx => this.browse(this.exportOn, path.replace(/\/[^/]*$/, "") || "/", cx)).text_color(t.dim).child("📁 ..") : div(),
       ...(this.exDirs ?? []).map(d => row(`aws-x-d-${d}`, cx => this.browse(this.exportOn, `${path === "/" ? "" : path}/${d}`, cx)).child(`📁 ${d}`)),
     ];
