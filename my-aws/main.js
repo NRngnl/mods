@@ -1,7 +1,7 @@
 // AWS panel: CodePipeline state and CloudWatch Logs, read-only, through the `aws` CLI on the
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
-import { View, div, list, uniform_list } from "gpui-kit";
-import { v_flex, h_flex, Input, InputState, Scrollbar } from "gpui-base";
+import { View, div, list } from "gpui-kit";
+import { v_flex, h_flex, Input, InputState, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, focused, exec, theme, settings, shared, setShared, machines, window, hc, home, notify, writeTextFile } from "herdr";
 
 function machine() {
@@ -68,9 +68,9 @@ async function listDirs(on, dir) {
 
 // A list that fills the remaining height and builds only the rows on screen; long log views
 // (thousands of rows) stay responsive. Rows can't carry handlers: clicks go through onClick(key).
-function scroller(id, items, key, render, onClick, uniform = true) {
+function scroller(id, items, key, render, onClick, uniform = 26) {
   const l = uniform
-    ? uniform_list(id, items.length, i => key(items[i]), (rg, cx) => items.slice(rg.start, rg.end).map(x => render(x, cx)))
+    ? v_virtual_list(id, items.length, uniform, i => key(items[i]), (rg, cx) => items.slice(rg.start, rg.end).map(x => render(x, cx)))
     : list(id, items.length, i => key(items[i]), (i, cx) => render(items[i], cx));
   return v_flex()
     .relative()
@@ -193,6 +193,16 @@ export default class Aws extends View {
   }
 
   // Live case-insensitive substring match on the list being shown.
+  // Filtered list, recomputed only when the list or filter text changes (not on every frame).
+  filtered(tag, items, name) {
+    const q = this.filter.value().trim().toLowerCase(),
+      c = (this.fcache ??= {})[tag];
+    if (c && c.items === items && c.q === q) return c.out;
+    const out = (items ?? []).filter(x => !q || name(x).toLowerCase().includes(q));
+    this.fcache[tag] = { items, q, out };
+    return out;
+  }
+
   match(name) {
     const q = this.filter.value().trim().toLowerCase();
     return !q || name.toLowerCase().includes(q);
@@ -598,10 +608,10 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
         this.filterBox(),
         scroller(
           "aws-streams-list",
-          (this.streams ?? []).filter(s => this.match(s.logStreamName)),
+          this.filtered("streams", this.streams, s => s.logStreamName),
           s => s.logStreamName,
           s =>
-            h_flex().px(10).py(4).gap(8).items_center().rounded(6).hover(h => h.bg(t.selected))
+            h_flex().h(26).px(10).gap(8).items_center()
               .child(div().flex_1().min_w(0).text_ellipsis().child(s.logStreamName))
               .child(div().text_color(t.dim).text_size(11.5).child(s.lastEventTimestamp ? ago(s.lastEventTimestamp) : "")),
           (k, cx) => this.openStream(k, cx),
@@ -685,9 +695,9 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
       this.filterBox(),
       scroller(
         "aws-groups",
-        (this.groups ?? []).filter(g => this.match(g.logGroupName)),
+        this.filtered("groups", this.groups, g => g.logGroupName),
         g => g.logGroupName,
-        g => h_flex().px(10).py(4).items_center().rounded(6).hover(h => h.bg(t.selected)).child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName)),
+        g => h_flex().h(26).px(10).items_center().child(div().flex_1().min_w(0).text_ellipsis().child(g.logGroupName)),
         (k, cx) => this.openGroup(k, cx),
       ),
     ];
