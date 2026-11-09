@@ -46,11 +46,14 @@ console's "Search log group". From there:
 - **Streams…** lists the 200 most recent streams; pick one to narrow the view to it, and
   **all streams** to go back.
 
+Times are in local time. The events are one read-only text view: drag (or Shift+click) to select
+any range and copy with Cmd/Ctrl+C.
+
 ↻ re-runs the current query.
 
 **Export…** saves **every event matching the current range, pattern and stream**, not just the
 loaded 2000: the `aws` CLI pages through all results on the AWS machine. Each line is
-`time<TAB>stream<TAB>message` (UTC). Pick any of your machines, browse folders like my-files
+`time<TAB>stream<TAB>message`, time in that machine's local zone with its offset. Pick any of your machines, browse folders like my-files
 (📁 .. goes up), type a name and **New folder** to create one, edit the file name if you like,
 then **Save all matching here**. If the file exists you get **Overwrite** or **Cancel**. Each
 machine remembers its last folder, and the last machine is preselected. Another machine gets the

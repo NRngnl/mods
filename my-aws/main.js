@@ -1,7 +1,7 @@
 // AWS panel: CodePipeline state and CloudWatch Logs, read-only, through the `aws` CLI on the
 // focused machine. Credentials are whatever that CLI resolves (profiles, SSO, env).
 import { View, div, list, uniform_list } from "gpui-kit";
-import { v_flex, h_flex, Input, InputState, Scrollbar } from "gpui-base";
+import { v_flex, h_flex, Input, InputState, Scrollbar, Editor, EditorState } from "gpui-base";
 import { spaces, focused, exec, theme, settings, shared, setShared, machines, window, hc, home, notify, writeTextFile } from "herdr";
 
 function machine() {
@@ -41,6 +41,12 @@ const absMs = v => {
   return d.getMonth() === m[2] - 1 && d.getDate() === +m[3] ? d.getTime() : null;
 };
 const MAX_EVENTS = 2000;
+// Local time "YYYY-MM-DD HH:MM:SS.mmm".
+const pad = (n, w = 2) => String(n).padStart(w, "0");
+const local = ms => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+};
 const time = v => (v == null ? 0 : typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : Date.parse(v));
 
 // ssh target of a herdr machine, for scp of exported logs.
@@ -111,7 +117,16 @@ export default class Aws extends View {
     this.on = undefined;
   }
 
+  // The events as one read-only editor: drag to select any range, Cmd/Ctrl+C to copy.
+  setLogText() {
+    const multi = !this.stream;
+    const text = (this.events ?? []).map(ev => `${local(ev.timestamp)}  ${multi && ev.logStreamName ? `[${ev.logStreamName}]  ` : ""}${ev.message.trimEnd()}`).join("\n");
+    if (this.logText) return this.logText.set_value(text);
+    this.logText = EditorState.new({ readonly: true, value: text, soft_wrap: true, line_numbers: false, folding: false, font_family: settings().font_family, font_size: 11.5 });
+  }
+
   close() {
+    this.logText?.release();
     this.watchGen = (this.watchGen ?? 0) + 1;
     this.region.release();
     this.filter.release();
@@ -250,6 +265,7 @@ export default class Aws extends View {
       [...args, "--max-items", String(MAX_EVENTS)],
       d => {
         this.events = d.events ?? [];
+        this.setLogText();
         this.truncated = Boolean(d.NextToken ?? d.nextToken);
       },
     );
@@ -273,7 +289,7 @@ export default class Aws extends View {
   }
 
   openExport(cx) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const stamp = local(Date.now()).slice(0, 19).replace(/[: ]/g, "-");
     this.exName.set_value(`${this.group.replace(/[^\w.-]+/g, "_").replace(/^_+/, "")}${this.stream ? "_" + this.stream.replace(/[^\w.-]+/g, "_") : ""}_${stamp}.log`);
     this.exporting = true;
     this.confirm = null;
@@ -329,7 +345,7 @@ export default class Aws extends View {
     cx.spawn(async () => {
       try {
         const q = await exec("sh", ["-c", `cd "$HOME" && t=$1 && shift && aws "$@" > "$t.raw" || { s=$?; rm -f "$t.raw"; exit $s; }
-if command -v perl >/dev/null; then perl -MPOSIX -pe 's/^(\\d+)(\\d{3})\t/strftime("%Y-%m-%dT%H:%M:%S",gmtime($1)).".$2Z\t"/e' "$t.raw" > "$t"; else mv "$t.raw" "$t"; fi
+if command -v perl >/dev/null; then perl -MPOSIX -pe 's/^(\\d+)(\\d{3})\t/strftime("%Y-%m-%d %H:%M:%S",localtime($1)).".$2".strftime("%z",localtime($1))."\t"/e' "$t.raw" > "$t"; else mv "$t.raw" "$t"; fi
 rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "--query", "events[].[timestamp,logStreamName,message]"], { on: src });
         if (q.code !== 0) throw new Error(q.stderr.trim().slice(0, 300) || "aws failed");
         if (src === on) {
@@ -582,7 +598,6 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
         ),
       ];
     if (this.group) {
-      const mono = settings().font_family ?? "JetBrains Mono";
       const small = (id, label, active, click) =>
         div().id(id).px(6).py(1).rounded(5).text_size(11.5).when(active, e => e.bg(t.selected)).hover(s => s.bg(t.selected)).on_click((_e, cx) => click(cx)).child(label);
       const multi = !this.stream;
@@ -618,21 +633,7 @@ rm -f "$t.raw"; wc -l < "$t"`, "x", tmp, ...args, ...opts, "--output", "text", "
           .text_size(11.5)
           .text_color(t.dim)
           .child(this.events ? `${this.events.length} events, ${this.range === "abs" ? `${this.from.value().trim()} → ${this.to.value().trim() || "now"}` : `last ${this.range}`}${this.truncated ? ` (first ${MAX_EVENTS} only; narrow the range or pattern)` : ""}` : "loading…"),
-        scroller("aws-events", this.events ?? [], ev => ev.eventId ?? `${ev.timestamp}-${ev.logStreamName}-${ev.ingestionTime}`, ev =>
-          v_flex()
-            .px(10)
-            .py(1)
-            .font_family(mono)
-            .text_size(11.5)
-            .child(
-              h_flex()
-                .gap(8)
-                .items_start()
-                .child(div().flex_none().text_color(t.dim).child(new Date(ev.timestamp).toISOString().slice(5, 19).replace("T", " ")))
-                .child(div().flex_1().min_w(0).child(ev.message.trimEnd())),
-            )
-            .when(multi && ev.logStreamName, e => e.child(div().pl(16).text_color(t.dim).text_size(10.5).text_ellipsis().child(ev.logStreamName))),
-        null, false),
+        this.events ? Editor.new(this.logText).flex_1().min_h(0) : div(),
       ];
     }
     return [
